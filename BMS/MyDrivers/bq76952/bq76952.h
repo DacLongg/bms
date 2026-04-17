@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "i2c_soft.h"
 #include "stm32l0xx_hal.h"
 
 #ifdef __cplusplus
@@ -89,22 +90,6 @@ typedef enum {
 #define FULL_ACCESS_KEY_STEP_2 0xABCDU
 
 #define CELL_INTERCONNECT_RESISTANCE_MOHM 0U
-
-#ifndef BQ76952_I2C_PORT
-#define BQ76952_I2C_PORT GPIOB
-#endif
-
-#ifndef BQ76952_I2C_SDA_PIN
-#define BQ76952_I2C_SDA_PIN GPIO_PIN_7
-#endif
-
-#ifndef BQ76952_I2C_SCL_PIN
-#define BQ76952_I2C_SCL_PIN GPIO_PIN_6
-#endif
-
-#ifndef BQ76952_I2C_DELAY_US
-#define BQ76952_I2C_DELAY_US 10U
-#endif
 
 typedef union {
     struct {

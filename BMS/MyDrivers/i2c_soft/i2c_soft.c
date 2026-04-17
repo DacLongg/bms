@@ -1,4 +1,4 @@
-#include "I2C_Soft.h"
+#include "i2c_soft.h"
 
 #define I2C_PIN_INPUT            GPIO_MODE_INPUT
 #define I2C_PIN_OUTPUT           GPIO_MODE_OUTPUT_PP
@@ -9,9 +9,12 @@
 #define I2C_CYCLE_TIME_OUT       3
 #define I2C_COUNT_TIME_OUT       1000
 
-void I2C_Delay(uint32_t)
+static void I2C_Delay(uint32_t delay)
 {
-  
+  while (delay-- > 0U)
+  {
+    __NOP();
+  }
 }
 
 void I2C_SDA_Setup(uint32_t direct)
@@ -57,7 +60,7 @@ void I2C_Soft_Start(void)
   I2C_Delay(I2C_TIME_DELAY);
 }
 
-void I2C_Soft_Stop() {
+void I2C_Soft_Stop(void) {
   
   I2C_SDA_Setup(I2C_PIN_OUTPUT);
   I2C_SCL_Setup(I2C_PIN_OUTPUT);
@@ -144,8 +147,52 @@ Std_ReturnType I2C_Soft_WriteByte(uint8_t byte)
    return E_OK;
 }
 
+uint8_t I2C_Soft_ReadByte(uint8_t ack)
+{
+  uint8_t value = 0;
+
+  I2C_SDA_Setup(I2C_PIN_INPUT);
+  for(uint8_t CountBits = 0; CountBits < 8; CountBits++)
+  {
+    value <<= 1;
+
+    I2C_SCL_ON;
+    I2C_Delay(I2C_TIME_DELAY/2 + 1);
+
+    value |= I2C_SDA_READ;
+    I2C_Delay(I2C_TIME_DELAY/2 + 1);
+
+    I2C_SCL_OFF;
+    I2C_Delay(I2C_TIME_DELAY + 1);
+  }
+
+  I2C_SDA_Setup(I2C_PIN_OUTPUT);
+  if (ack != 0U)
+  {
+    I2C_SDA_OFF;
+  }
+  else
+  {
+    I2C_SDA_ON;
+  }
+
+  I2C_SCL_ON;
+  I2C_Delay(I2C_TIME_DELAY);
+  I2C_SCL_OFF;
+  I2C_Delay(I2C_TIME_DELAY);
+  I2C_SDA_ON;
+
+  return value;
+}
+
 Std_ReturnType I2C_Soft_ReadByteRegister(uint8_t address,uint8_t add_reg, uint8_t *byte) 
 {
+  if (byte == NULL)
+  {
+    return E_NOT_OK;
+  }
+
+  *byte = 0;
   I2C_Soft_Start();
   
   if (E_NOT_OK == I2C_Soft_WriteByte(address << 1))
@@ -164,32 +211,9 @@ Std_ReturnType I2C_Soft_ReadByteRegister(uint8_t address,uint8_t add_reg, uint8_
     return E_NOT_OK;
   }
 
-  I2C_SDA_Setup(I2C_PIN_INPUT);
-  for(uint8_t CountBits = 0; CountBits < 8; CountBits++) 
-  {
-    *byte <<= 1;
-    
-    I2C_SCL_ON;
-    I2C_Delay(I2C_TIME_DELAY/2 + 1);
-    
-    *byte |= I2C_SDA_READ;
-    I2C_Delay(I2C_TIME_DELAY/2 + 1);
-    
-    I2C_SCL_OFF;
-    I2C_Delay(I2C_TIME_DELAY + 1);
-  }
-
-  I2C_SDA_Setup(I2C_PIN_OUTPUT);
-  
-  I2C_SDA_ON;
-  I2C_SCL_ON;
-  I2C_Delay(I2C_TIME_DELAY);
-  
-  I2C_SCL_OFF;
-  I2C_Delay(I2C_TIME_DELAY);
-
+  *byte = I2C_Soft_ReadByte(0);
   I2C_Soft_Stop();
-  return *byte;
+  return E_OK;
 }
 
 Std_ReturnType I2C_Soft_WriteData(uint8_t address, uint8_t *data, uint16_t len)
@@ -238,6 +262,11 @@ Std_ReturnType I2C_Soft_WriteDataFromAddress(uint8_t address, uint8_t add_reg, u
 
 Std_ReturnType I2c_Soft_ReadData(uint8_t address, uint8_t *data, uint16_t len)
 {
+  if (data == NULL)
+  {
+    return E_NOT_OK;
+  }
+
   I2C_Soft_Start();
   if (E_NOT_OK == I2C_Soft_WriteByte((address << 1) | 0x01))
   {
@@ -246,35 +275,7 @@ Std_ReturnType I2c_Soft_ReadData(uint8_t address, uint8_t *data, uint16_t len)
 
   for (uint16_t countdata = 0; countdata < len; countdata++)
   {
-    I2C_SDA_Setup(I2C_PIN_INPUT);
-    for (uint8_t CountBits = 0; CountBits < 8; CountBits++)
-    {
-      data[countdata] <<= 1;
-      I2C_SCL_ON;
-      I2C_Delay(I2C_TIME_DELAY/2 + 1);
-
-      data[countdata] |= I2C_SDA_READ;
-      I2C_Delay(I2C_TIME_DELAY/2 + 1);
-      
-      I2C_SCL_OFF;
-      I2C_Delay(I2C_TIME_DELAY + 1);
-    }
-
-    I2C_SDA_Setup(I2C_PIN_OUTPUT);
-    if (countdata == (len - 1))
-    {
-       I2C_SDA_ON;
-    }
-    else
-    {
-       I2C_SDA_OFF;
-    }
-
-    I2C_SCL_ON;
-    I2C_Delay(I2C_TIME_DELAY);
-    
-    I2C_SCL_OFF;
-    I2C_Delay(I2C_TIME_DELAY);
+    data[countdata] = I2C_Soft_ReadByte((countdata + 1U) < len ? 1U : 0U);
   }
   I2C_Delay(I2C_TIME_DELAY);
   
@@ -284,6 +285,11 @@ Std_ReturnType I2c_Soft_ReadData(uint8_t address, uint8_t *data, uint16_t len)
 
 Std_ReturnType I2C_Soft_ReadDataFromAddress(uint8_t address,uint8_t add_reg, uint8_t *data, uint16_t len) 
 {
+  if (data == NULL)
+  {
+    return E_NOT_OK;
+  }
+
   I2C_Soft_Start();
   
   if (E_NOT_OK == I2C_Soft_WriteByte(address << 1))
@@ -304,36 +310,7 @@ Std_ReturnType I2C_Soft_ReadDataFromAddress(uint8_t address,uint8_t add_reg, uin
   
   for (uint16_t countdata = 0; countdata < len; countdata++)
   {
-      I2C_SDA_Setup(I2C_PIN_INPUT);
-      for(uint8_t CountBits = 0; CountBits < 8; CountBits++) 
-      {
-          *data <<= 1;
-        
-          I2C_SCL_ON;
-          I2C_Delay(I2C_TIME_DELAY/2 + 1);
-        
-          *data |= I2C_SDA_READ;
-          I2C_Delay(I2C_TIME_DELAY/2 + 1);
-          
-          I2C_SCL_OFF;
-          I2C_Delay(I2C_TIME_DELAY + 1);
-      }
-    
-      I2C_SDA_Setup(I2C_PIN_OUTPUT);
-      if (countdata == (len - 1))
-      {
-         I2C_SDA_ON;
-      }
-      else
-      {
-         I2C_SDA_OFF;
-      }
-      
-      I2C_SCL_ON;
-      I2C_Delay(I2C_TIME_DELAY);
-      
-      I2C_SCL_OFF;
-      I2C_Delay(I2C_TIME_DELAY);
+      data[countdata] = I2C_Soft_ReadByte((countdata + 1U) < len ? 1U : 0U);
    }
   
   I2C_Soft_Stop();

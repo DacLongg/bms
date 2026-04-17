@@ -1,8 +1,6 @@
 #include "bq76952.h"
 
 #define BQ_I2C_ADDR 0x08U
-#define BQ_I2C_ADDR_WRITE (BQ_I2C_ADDR << 1)
-#define BQ_I2C_ADDR_READ ((BQ_I2C_ADDR << 1) | 0x01U)
 
 #define CMD_DIR_SUBCMD_LOW 0x3EU
 #define CMD_DIR_RESP_START 0x40U
@@ -45,25 +43,7 @@
 #define HIGH_BYTE(data) ((byte)(((data) >> 8) & 0x00FFU))
 #define BQ_READ_STATUS_BIT(value, bit) (((value) >> (bit)) & 0x01U)
 
-#define BQ_I2C_PIN_INPUT GPIO_MODE_INPUT
-#define BQ_I2C_PIN_OUTPUT GPIO_MODE_OUTPUT_PP
-#define BQ_I2C_TIMEOUT_COUNT 1000U
-
-typedef struct {
-    GPIO_TypeDef *port;
-    uint16_t sda_pin;
-    uint16_t scl_pin;
-    I2C_HandleTypeDef *hi2c;
-    bool initialized;
-} bq76952_context_t;
-
-static bq76952_context_t g_bq76952 = {
-    .port = BQ76952_I2C_PORT,
-    .sda_pin = BQ76952_I2C_SDA_PIN,
-    .scl_pin = BQ76952_I2C_SCL_PIN,
-    .hi2c = NULL,
-    .initialized = false,
-};
+static I2C_HandleTypeDef *g_bq76952_hi2c;
 
 static bq76952_protection_t g_protection_status;
 static bq76952_safety_alert_c_t g_safety_alert_c;
@@ -72,17 +52,6 @@ static uint16_t g_unseal_key_step_2;
 static uint16_t g_full_access_key_step_1;
 static uint16_t g_full_access_key_step_2;
 
-static void bq76952_delay_us(uint32_t us);
-static void bq76952_i2c_sda_setup(uint32_t mode);
-static void bq76952_i2c_scl_setup(uint32_t mode);
-static void bq76952_i2c_sda_write(GPIO_PinState state);
-static void bq76952_i2c_scl_write(GPIO_PinState state);
-static GPIO_PinState bq76952_i2c_sda_read(void);
-static void bq76952_i2c_init(void);
-static void bq76952_i2c_start(void);
-static void bq76952_i2c_stop(void);
-static bool bq76952_i2c_write_byte(byte value);
-static byte bq76952_i2c_read_byte(bool ack);
 static unsigned int bq76952_directCommand(byte command);
 static void bq76952_subCommand(unsigned int data);
 static int16_t bq76952_subCommandResponseInt(byte offset);
@@ -90,159 +59,9 @@ static byte bq76952_calculateChecksum(byte oldChecksum, byte data);
 static void bq76952_writeDataMemory(unsigned int addr, int16_t data, byte noOfBytes);
 static void bq76952_writeDataMemoryWithoutConfigUpdate(unsigned int addr, int16_t data, byte noOfBytes);
 
-static void bq76952_delay_us(uint32_t us)
-{
-    uint32_t delay = us * 2U;
-
-    while (delay-- > 0U) {
-        __NOP();
-    }
-}
-
-static void bq76952_i2c_sda_setup(uint32_t mode)
-{
-    GPIO_InitTypeDef gpio = {0};
-
-    gpio.Pin = g_bq76952.sda_pin;
-    gpio.Mode = mode;
-    gpio.Pull = GPIO_NOPULL;
-    gpio.Speed = GPIO_SPEED_FREQ_LOW;
-    HAL_GPIO_Init(g_bq76952.port, &gpio);
-}
-
-static void bq76952_i2c_scl_setup(uint32_t mode)
-{
-    GPIO_InitTypeDef gpio = {0};
-
-    gpio.Pin = g_bq76952.scl_pin;
-    gpio.Mode = mode;
-    gpio.Pull = GPIO_NOPULL;
-    gpio.Speed = GPIO_SPEED_FREQ_LOW;
-    HAL_GPIO_Init(g_bq76952.port, &gpio);
-}
-
-static void bq76952_i2c_sda_write(GPIO_PinState state)
-{
-    HAL_GPIO_WritePin(g_bq76952.port, g_bq76952.sda_pin, state);
-}
-
-static void bq76952_i2c_scl_write(GPIO_PinState state)
-{
-    HAL_GPIO_WritePin(g_bq76952.port, g_bq76952.scl_pin, state);
-}
-
-static GPIO_PinState bq76952_i2c_sda_read(void)
-{
-    return HAL_GPIO_ReadPin(g_bq76952.port, g_bq76952.sda_pin);
-}
-
-static void bq76952_i2c_init(void)
-{
-    bq76952_i2c_sda_setup(BQ_I2C_PIN_OUTPUT);
-    bq76952_i2c_scl_setup(BQ_I2C_PIN_OUTPUT);
-    bq76952_i2c_sda_write(GPIO_PIN_SET);
-    bq76952_i2c_scl_write(GPIO_PIN_SET);
-    g_bq76952.initialized = true;
-}
-
-static void bq76952_i2c_start(void)
-{
-    bq76952_i2c_sda_setup(BQ_I2C_PIN_OUTPUT);
-    bq76952_i2c_scl_setup(BQ_I2C_PIN_OUTPUT);
-
-    bq76952_i2c_sda_write(GPIO_PIN_SET);
-    bq76952_i2c_scl_write(GPIO_PIN_SET);
-    bq76952_delay_us(BQ76952_I2C_DELAY_US);
-
-    bq76952_i2c_sda_write(GPIO_PIN_RESET);
-    bq76952_delay_us(BQ76952_I2C_DELAY_US);
-
-    bq76952_i2c_scl_write(GPIO_PIN_RESET);
-    bq76952_delay_us(BQ76952_I2C_DELAY_US);
-}
-
-static void bq76952_i2c_stop(void)
-{
-    bq76952_i2c_sda_setup(BQ_I2C_PIN_OUTPUT);
-    bq76952_i2c_scl_setup(BQ_I2C_PIN_OUTPUT);
-
-    bq76952_i2c_sda_write(GPIO_PIN_RESET);
-    bq76952_i2c_scl_write(GPIO_PIN_RESET);
-    bq76952_delay_us(BQ76952_I2C_DELAY_US);
-
-    bq76952_i2c_scl_write(GPIO_PIN_SET);
-    bq76952_delay_us(BQ76952_I2C_DELAY_US);
-
-    bq76952_i2c_sda_write(GPIO_PIN_SET);
-    bq76952_delay_us(BQ76952_I2C_DELAY_US);
-}
-
-static bool bq76952_i2c_write_byte(byte value)
-{
-    uint16_t timeout = 0U;
-
-    bq76952_i2c_sda_setup(BQ_I2C_PIN_OUTPUT);
-    bq76952_i2c_scl_setup(BQ_I2C_PIN_OUTPUT);
-
-    for (uint8_t bit = 0U; bit < 8U; ++bit) {
-        bq76952_i2c_sda_write((value & 0x80U) != 0U ? GPIO_PIN_SET : GPIO_PIN_RESET);
-        bq76952_delay_us(BQ76952_I2C_DELAY_US);
-        bq76952_i2c_scl_write(GPIO_PIN_SET);
-        bq76952_delay_us(BQ76952_I2C_DELAY_US);
-        bq76952_i2c_scl_write(GPIO_PIN_RESET);
-        value <<= 1;
-    }
-
-    bq76952_i2c_sda_write(GPIO_PIN_SET);
-    bq76952_i2c_sda_setup(BQ_I2C_PIN_INPUT);
-
-    while (bq76952_i2c_sda_read() == GPIO_PIN_SET) {
-        if (++timeout >= BQ_I2C_TIMEOUT_COUNT) {
-            bq76952_i2c_stop();
-            return false;
-        }
-        bq76952_delay_us(3U);
-    }
-
-    bq76952_i2c_scl_write(GPIO_PIN_SET);
-    bq76952_delay_us(BQ76952_I2C_DELAY_US);
-    bq76952_i2c_scl_write(GPIO_PIN_RESET);
-    bq76952_i2c_sda_setup(BQ_I2C_PIN_OUTPUT);
-
-    return true;
-}
-
-static byte bq76952_i2c_read_byte(bool ack)
-{
-    byte value = 0U;
-
-    bq76952_i2c_sda_setup(BQ_I2C_PIN_INPUT);
-    for (uint8_t bit = 0U; bit < 8U; ++bit) {
-        value <<= 1;
-        bq76952_i2c_scl_write(GPIO_PIN_SET);
-        bq76952_delay_us((BQ76952_I2C_DELAY_US / 2U) + 1U);
-        value |= (byte)bq76952_i2c_sda_read();
-        bq76952_delay_us((BQ76952_I2C_DELAY_US / 2U) + 1U);
-        bq76952_i2c_scl_write(GPIO_PIN_RESET);
-        bq76952_delay_us(BQ76952_I2C_DELAY_US + 1U);
-    }
-
-    bq76952_i2c_sda_setup(BQ_I2C_PIN_OUTPUT);
-    bq76952_i2c_sda_write(ack ? GPIO_PIN_RESET : GPIO_PIN_SET);
-    bq76952_i2c_scl_write(GPIO_PIN_SET);
-    bq76952_delay_us(BQ76952_I2C_DELAY_US);
-    bq76952_i2c_scl_write(GPIO_PIN_RESET);
-    bq76952_delay_us(BQ76952_I2C_DELAY_US);
-    bq76952_i2c_sda_write(GPIO_PIN_SET);
-
-    return value;
-}
-
 void bq76952_begin(void)
 {
-    if (!g_bq76952.initialized) {
-        bq76952_i2c_init();
-    }
+    I2C_Soft_Init();
 }
 
 static unsigned int bq76952_directCommand(byte command)
@@ -250,34 +69,35 @@ static unsigned int bq76952_directCommand(byte command)
     byte lsb;
     byte msb;
 
-    bq76952_i2c_start();
-    if (!bq76952_i2c_write_byte(BQ_I2C_ADDR_WRITE) || !bq76952_i2c_write_byte(command)) {
-        bq76952_i2c_stop();
+    I2C_Soft_Start();
+    if ((I2C_Soft_WriteByte((uint8_t)(BQ_I2C_ADDR << 1)) != E_OK) ||
+        (I2C_Soft_WriteByte(command) != E_OK)) {
+        I2C_Soft_Stop();
         return 0U;
     }
-    bq76952_i2c_stop();
+    I2C_Soft_Stop();
 
-    bq76952_i2c_start();
-    if (!bq76952_i2c_write_byte(BQ_I2C_ADDR_READ)) {
-        bq76952_i2c_stop();
+    I2C_Soft_Start();
+    if (I2C_Soft_WriteByte((uint8_t)((BQ_I2C_ADDR << 1) | 0x01U)) != E_OK) {
+        I2C_Soft_Stop();
         return 0U;
     }
-    lsb = bq76952_i2c_read_byte(true);
-    msb = bq76952_i2c_read_byte(false);
-    bq76952_i2c_stop();
+    lsb = I2C_Soft_ReadByte(1U);
+    msb = I2C_Soft_ReadByte(0U);
+    I2C_Soft_Stop();
 
     return (unsigned int)(((unsigned int)msb << 8) | lsb);
 }
 
 static void bq76952_subCommand(unsigned int data)
 {
-    bq76952_i2c_start();
-    if (bq76952_i2c_write_byte(BQ_I2C_ADDR_WRITE) &&
-        bq76952_i2c_write_byte(CMD_DIR_SUBCMD_LOW) &&
-        bq76952_i2c_write_byte(LOW_BYTE(data))) {
-        (void)bq76952_i2c_write_byte(HIGH_BYTE(data));
+    I2C_Soft_Start();
+    if ((I2C_Soft_WriteByte((uint8_t)(BQ_I2C_ADDR << 1)) == E_OK) &&
+        (I2C_Soft_WriteByte(CMD_DIR_SUBCMD_LOW) == E_OK) &&
+        (I2C_Soft_WriteByte(LOW_BYTE(data)) == E_OK)) {
+        (void)I2C_Soft_WriteByte(HIGH_BYTE(data));
     }
-    bq76952_i2c_stop();
+    I2C_Soft_Stop();
 }
 
 static int16_t bq76952_subCommandResponseInt(byte offset)
@@ -285,22 +105,22 @@ static int16_t bq76952_subCommandResponseInt(byte offset)
     byte lsb;
     byte msb;
 
-    bq76952_i2c_start();
-    if (!bq76952_i2c_write_byte(BQ_I2C_ADDR_WRITE) ||
-        !bq76952_i2c_write_byte((byte)(CMD_DIR_RESP_START + offset))) {
-        bq76952_i2c_stop();
+    I2C_Soft_Start();
+    if ((I2C_Soft_WriteByte((uint8_t)(BQ_I2C_ADDR << 1)) != E_OK) ||
+        (I2C_Soft_WriteByte((byte)(CMD_DIR_RESP_START + offset)) != E_OK)) {
+        I2C_Soft_Stop();
         return 0;
     }
-    bq76952_i2c_stop();
+    I2C_Soft_Stop();
 
-    bq76952_i2c_start();
-    if (!bq76952_i2c_write_byte(BQ_I2C_ADDR_READ)) {
-        bq76952_i2c_stop();
+    I2C_Soft_Start();
+    if (I2C_Soft_WriteByte((uint8_t)((BQ_I2C_ADDR << 1) | 0x01U)) != E_OK) {
+        I2C_Soft_Stop();
         return 0;
     }
-    lsb = bq76952_i2c_read_byte(true);
-    msb = bq76952_i2c_read_byte(false);
-    bq76952_i2c_stop();
+    lsb = I2C_Soft_ReadByte(1U);
+    msb = I2C_Soft_ReadByte(0U);
+    I2C_Soft_Stop();
 
     return (int16_t)(((uint16_t)msb << 8) | lsb);
 }
@@ -339,25 +159,25 @@ static void bq76952_writeDataMemory(unsigned int addr, int16_t data, byte noOfBy
 
     bq76952_enterConfigUpdate();
 
-    bq76952_i2c_start();
-    if (bq76952_i2c_write_byte(BQ_I2C_ADDR_WRITE) &&
-        bq76952_i2c_write_byte(CMD_DIR_SUBCMD_LOW) &&
-        bq76952_i2c_write_byte(LOW_BYTE(addr)) &&
-        bq76952_i2c_write_byte(HIGH_BYTE(addr)) &&
-        bq76952_i2c_write_byte(LOW_BYTE(data))) {
+    I2C_Soft_Start();
+    if ((I2C_Soft_WriteByte((uint8_t)(BQ_I2C_ADDR << 1)) == E_OK) &&
+        (I2C_Soft_WriteByte(CMD_DIR_SUBCMD_LOW) == E_OK) &&
+        (I2C_Soft_WriteByte(LOW_BYTE(addr)) == E_OK) &&
+        (I2C_Soft_WriteByte(HIGH_BYTE(addr)) == E_OK) &&
+        (I2C_Soft_WriteByte(LOW_BYTE(data)) == E_OK)) {
         if (noOfBytes == 2U) {
-            (void)bq76952_i2c_write_byte(HIGH_BYTE(data));
+            (void)I2C_Soft_WriteByte(HIGH_BYTE(data));
         }
     }
-    bq76952_i2c_stop();
+    I2C_Soft_Stop();
 
-    bq76952_i2c_start();
-    if (bq76952_i2c_write_byte(BQ_I2C_ADDR_WRITE) &&
-        bq76952_i2c_write_byte(CMD_DIR_RESP_CHKSUM) &&
-        bq76952_i2c_write_byte(checksum)) {
-        (void)bq76952_i2c_write_byte(noOfBytes == 1U ? 0x05U : 0x06U);
+    I2C_Soft_Start();
+    if ((I2C_Soft_WriteByte((uint8_t)(BQ_I2C_ADDR << 1)) == E_OK) &&
+        (I2C_Soft_WriteByte(CMD_DIR_RESP_CHKSUM) == E_OK) &&
+        (I2C_Soft_WriteByte(checksum) == E_OK)) {
+        (void)I2C_Soft_WriteByte(noOfBytes == 1U ? 0x05U : 0x06U);
     }
-    bq76952_i2c_stop();
+    I2C_Soft_Stop();
 
     bq76952_exitConfigUpdate();
 }
@@ -371,70 +191,70 @@ static void bq76952_writeDataMemoryWithoutConfigUpdate(unsigned int addr, int16_
     checksum = bq76952_calculateChecksum(checksum, LOW_BYTE(data));
     checksum = bq76952_calculateChecksum(checksum, HIGH_BYTE(data));
 
-    bq76952_i2c_start();
-    if (bq76952_i2c_write_byte(BQ_I2C_ADDR_WRITE) &&
-        bq76952_i2c_write_byte(CMD_DIR_SUBCMD_LOW) &&
-        bq76952_i2c_write_byte(LOW_BYTE(addr)) &&
-        bq76952_i2c_write_byte(HIGH_BYTE(addr)) &&
-        bq76952_i2c_write_byte(LOW_BYTE(data))) {
+    I2C_Soft_Start();
+    if ((I2C_Soft_WriteByte((uint8_t)(BQ_I2C_ADDR << 1)) == E_OK) &&
+        (I2C_Soft_WriteByte(CMD_DIR_SUBCMD_LOW) == E_OK) &&
+        (I2C_Soft_WriteByte(LOW_BYTE(addr)) == E_OK) &&
+        (I2C_Soft_WriteByte(HIGH_BYTE(addr)) == E_OK) &&
+        (I2C_Soft_WriteByte(LOW_BYTE(data)) == E_OK)) {
         if (noOfBytes == 2U) {
-            (void)bq76952_i2c_write_byte(HIGH_BYTE(data));
+            (void)I2C_Soft_WriteByte(HIGH_BYTE(data));
         }
     }
-    bq76952_i2c_stop();
+    I2C_Soft_Stop();
 
-    bq76952_i2c_start();
-    if (bq76952_i2c_write_byte(BQ_I2C_ADDR_WRITE) &&
-        bq76952_i2c_write_byte(CMD_DIR_RESP_CHKSUM) &&
-        bq76952_i2c_write_byte(checksum)) {
-        (void)bq76952_i2c_write_byte(noOfBytes == 1U ? 0x05U : 0x06U);
+    I2C_Soft_Start();
+    if ((I2C_Soft_WriteByte((uint8_t)(BQ_I2C_ADDR << 1)) == E_OK) &&
+        (I2C_Soft_WriteByte(CMD_DIR_RESP_CHKSUM) == E_OK) &&
+        (I2C_Soft_WriteByte(checksum) == E_OK)) {
+        (void)I2C_Soft_WriteByte(noOfBytes == 1U ? 0x05U : 0x06U);
     }
-    bq76952_i2c_stop();
+    I2C_Soft_Stop();
 }
 
 unsigned int bq76952_readDataMemory(unsigned int addr, int size)
 {
     byte lsb;
 
-    bq76952_i2c_start();
-    if (!bq76952_i2c_write_byte(BQ_I2C_ADDR_WRITE) ||
-        !bq76952_i2c_write_byte(CMD_DIR_SUBCMD_LOW) ||
-        !bq76952_i2c_write_byte(LOW_BYTE(addr)) ||
-        !bq76952_i2c_write_byte(HIGH_BYTE(addr))) {
-        bq76952_i2c_stop();
+    I2C_Soft_Start();
+    if ((I2C_Soft_WriteByte((uint8_t)(BQ_I2C_ADDR << 1)) != E_OK) ||
+        (I2C_Soft_WriteByte(CMD_DIR_SUBCMD_LOW) != E_OK) ||
+        (I2C_Soft_WriteByte(LOW_BYTE(addr)) != E_OK) ||
+        (I2C_Soft_WriteByte(HIGH_BYTE(addr)) != E_OK)) {
+        I2C_Soft_Stop();
         return 0U;
     }
-    bq76952_i2c_stop();
+    I2C_Soft_Stop();
 
     HAL_Delay(2U);
 
-    bq76952_i2c_start();
-    if (!bq76952_i2c_write_byte(BQ_I2C_ADDR_READ)) {
-        bq76952_i2c_stop();
+    I2C_Soft_Start();
+    if (I2C_Soft_WriteByte((uint8_t)((BQ_I2C_ADDR << 1) | 0x01U)) != E_OK) {
+        I2C_Soft_Stop();
         return 0U;
     }
 
-    lsb = bq76952_i2c_read_byte(size > 1);
+    lsb = I2C_Soft_ReadByte(size > 1 ? 1U : 0U);
     if (size == 1) {
-        bq76952_i2c_stop();
+        I2C_Soft_Stop();
         return lsb;
     }
 
     {
-        byte msb = bq76952_i2c_read_byte(false);
-        bq76952_i2c_stop();
+        byte msb = I2C_Soft_ReadByte(0U);
+        I2C_Soft_Stop();
         return (unsigned int)(((unsigned int)msb << 8) | lsb);
     }
 }
 
 bool bq76952_isConnected(void)
 {
-    bq76952_i2c_start();
-    if (!bq76952_i2c_write_byte(BQ_I2C_ADDR_WRITE)) {
-        bq76952_i2c_stop();
+    I2C_Soft_Start();
+    if (I2C_Soft_WriteByte((uint8_t)(BQ_I2C_ADDR << 1)) != E_OK) {
+        I2C_Soft_Stop();
         return false;
     }
-    bq76952_i2c_stop();
+    I2C_Soft_Stop();
     return true;
 }
 
@@ -1051,7 +871,7 @@ void bq76952_init(I2C_HandleTypeDef *hi2c)
     unsigned int hwVersion;
     unsigned int devNumber;
 
-    g_bq76952.hi2c = hi2c;
+    g_bq76952_hi2c = hi2c;
     bq76952_begin();
 
     HAL_Delay(1000U);
@@ -1060,6 +880,7 @@ void bq76952_init(I2C_HandleTypeDef *hi2c)
     hwVersion = bq76952_getHWVersion();
     (void)devNumber;
     (void)hwVersion;
+    (void)g_bq76952_hi2c;
 
     bq76952_setVcellMode(0xAAAFU);
     bq76952_setDA_Config();
