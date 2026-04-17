@@ -52,6 +52,9 @@ static uint16_t g_unseal_key_step_2;
 static uint16_t g_full_access_key_step_1;
 static uint16_t g_full_access_key_step_2;
 
+static bool bq76952_write_register(byte reg, const byte *data, uint16_t len);
+static bool bq76952_read_register(byte reg, byte *data, uint16_t len);
+static bool bq76952_read_raw(byte *data, uint16_t len);
 static unsigned int bq76952_directCommand(byte command);
 static void bq76952_subCommand(unsigned int data);
 static int16_t bq76952_subCommandResponseInt(byte offset);
@@ -64,65 +67,50 @@ void bq76952_begin(void)
     I2C_Soft_Init();
 }
 
+static bool bq76952_write_register(byte reg, const byte *data, uint16_t len)
+{
+    return I2C_Soft_WriteDataFromAddress(BQ_I2C_ADDR, reg, (uint8_t *)data, len) == E_OK;
+}
+
+static bool bq76952_read_register(byte reg, byte *data, uint16_t len)
+{
+    return I2C_Soft_ReadDataFromAddress(BQ_I2C_ADDR, reg, data, len) == E_OK;
+}
+
+static bool bq76952_read_raw(byte *data, uint16_t len)
+{
+    return I2c_Soft_ReadData(BQ_I2C_ADDR, data, len) == E_OK;
+}
+
 static unsigned int bq76952_directCommand(byte command)
 {
-    byte lsb;
-    byte msb;
+    byte data[2] = {0};
 
-    I2C_Soft_Start();
-    if ((I2C_Soft_WriteByte((uint8_t)(BQ_I2C_ADDR << 1)) != E_OK) ||
-        (I2C_Soft_WriteByte(command) != E_OK)) {
-        I2C_Soft_Stop();
+    if (!bq76952_read_register(command, data, 2U)) {
         return 0U;
     }
-    I2C_Soft_Stop();
 
-    I2C_Soft_Start();
-    if (I2C_Soft_WriteByte((uint8_t)((BQ_I2C_ADDR << 1) | 0x01U)) != E_OK) {
-        I2C_Soft_Stop();
-        return 0U;
-    }
-    lsb = I2C_Soft_ReadByte(1U);
-    msb = I2C_Soft_ReadByte(0U);
-    I2C_Soft_Stop();
-
-    return (unsigned int)(((unsigned int)msb << 8) | lsb);
+    return (unsigned int)(((unsigned int)data[1] << 8) | data[0]);
 }
 
 static void bq76952_subCommand(unsigned int data)
 {
-    I2C_Soft_Start();
-    if ((I2C_Soft_WriteByte((uint8_t)(BQ_I2C_ADDR << 1)) == E_OK) &&
-        (I2C_Soft_WriteByte(CMD_DIR_SUBCMD_LOW) == E_OK) &&
-        (I2C_Soft_WriteByte(LOW_BYTE(data)) == E_OK)) {
-        (void)I2C_Soft_WriteByte(HIGH_BYTE(data));
-    }
-    I2C_Soft_Stop();
+    byte payload[2];
+
+    payload[0] = LOW_BYTE(data);
+    payload[1] = HIGH_BYTE(data);
+    (void)bq76952_write_register(CMD_DIR_SUBCMD_LOW, payload, 2U);
 }
 
 static int16_t bq76952_subCommandResponseInt(byte offset)
 {
-    byte lsb;
-    byte msb;
+    byte data[2] = {0};
 
-    I2C_Soft_Start();
-    if ((I2C_Soft_WriteByte((uint8_t)(BQ_I2C_ADDR << 1)) != E_OK) ||
-        (I2C_Soft_WriteByte((byte)(CMD_DIR_RESP_START + offset)) != E_OK)) {
-        I2C_Soft_Stop();
+    if (!bq76952_read_register((byte)(CMD_DIR_RESP_START + offset), data, 2U)) {
         return 0;
     }
-    I2C_Soft_Stop();
 
-    I2C_Soft_Start();
-    if (I2C_Soft_WriteByte((uint8_t)((BQ_I2C_ADDR << 1) | 0x01U)) != E_OK) {
-        I2C_Soft_Stop();
-        return 0;
-    }
-    lsb = I2C_Soft_ReadByte(1U);
-    msb = I2C_Soft_ReadByte(0U);
-    I2C_Soft_Stop();
-
-    return (int16_t)(((uint16_t)msb << 8) | lsb);
+    return (int16_t)(((uint16_t)data[1] << 8) | data[0]);
 }
 
 void bq76952_enterConfigUpdate(void)
@@ -151,6 +139,9 @@ static byte bq76952_calculateChecksum(byte oldChecksum, byte data)
 static void bq76952_writeDataMemory(unsigned int addr, int16_t data, byte noOfBytes)
 {
     byte checksum = 0U;
+    byte payload[4];
+    byte footer[2];
+    uint16_t payload_len = (noOfBytes == 1U) ? 3U : 4U;
 
     checksum = bq76952_calculateChecksum(checksum, LOW_BYTE(addr));
     checksum = bq76952_calculateChecksum(checksum, HIGH_BYTE(addr));
@@ -158,26 +149,15 @@ static void bq76952_writeDataMemory(unsigned int addr, int16_t data, byte noOfBy
     checksum = bq76952_calculateChecksum(checksum, HIGH_BYTE(data));
 
     bq76952_enterConfigUpdate();
+    payload[0] = LOW_BYTE(addr);
+    payload[1] = HIGH_BYTE(addr);
+    payload[2] = LOW_BYTE(data);
+    payload[3] = HIGH_BYTE(data);
+    footer[0] = checksum;
+    footer[1] = (noOfBytes == 1U) ? 0x05U : 0x06U;
 
-    I2C_Soft_Start();
-    if ((I2C_Soft_WriteByte((uint8_t)(BQ_I2C_ADDR << 1)) == E_OK) &&
-        (I2C_Soft_WriteByte(CMD_DIR_SUBCMD_LOW) == E_OK) &&
-        (I2C_Soft_WriteByte(LOW_BYTE(addr)) == E_OK) &&
-        (I2C_Soft_WriteByte(HIGH_BYTE(addr)) == E_OK) &&
-        (I2C_Soft_WriteByte(LOW_BYTE(data)) == E_OK)) {
-        if (noOfBytes == 2U) {
-            (void)I2C_Soft_WriteByte(HIGH_BYTE(data));
-        }
-    }
-    I2C_Soft_Stop();
-
-    I2C_Soft_Start();
-    if ((I2C_Soft_WriteByte((uint8_t)(BQ_I2C_ADDR << 1)) == E_OK) &&
-        (I2C_Soft_WriteByte(CMD_DIR_RESP_CHKSUM) == E_OK) &&
-        (I2C_Soft_WriteByte(checksum) == E_OK)) {
-        (void)I2C_Soft_WriteByte(noOfBytes == 1U ? 0x05U : 0x06U);
-    }
-    I2C_Soft_Stop();
+    (void)bq76952_write_register(CMD_DIR_SUBCMD_LOW, payload, payload_len);
+    (void)bq76952_write_register(CMD_DIR_RESP_CHKSUM, footer, 2U);
 
     bq76952_exitConfigUpdate();
 }
@@ -185,77 +165,52 @@ static void bq76952_writeDataMemory(unsigned int addr, int16_t data, byte noOfBy
 static void bq76952_writeDataMemoryWithoutConfigUpdate(unsigned int addr, int16_t data, byte noOfBytes)
 {
     byte checksum = 0U;
+    byte payload[4];
+    byte footer[2];
+    uint16_t payload_len = (noOfBytes == 1U) ? 3U : 4U;
 
     checksum = bq76952_calculateChecksum(checksum, LOW_BYTE(addr));
     checksum = bq76952_calculateChecksum(checksum, HIGH_BYTE(addr));
     checksum = bq76952_calculateChecksum(checksum, LOW_BYTE(data));
     checksum = bq76952_calculateChecksum(checksum, HIGH_BYTE(data));
 
-    I2C_Soft_Start();
-    if ((I2C_Soft_WriteByte((uint8_t)(BQ_I2C_ADDR << 1)) == E_OK) &&
-        (I2C_Soft_WriteByte(CMD_DIR_SUBCMD_LOW) == E_OK) &&
-        (I2C_Soft_WriteByte(LOW_BYTE(addr)) == E_OK) &&
-        (I2C_Soft_WriteByte(HIGH_BYTE(addr)) == E_OK) &&
-        (I2C_Soft_WriteByte(LOW_BYTE(data)) == E_OK)) {
-        if (noOfBytes == 2U) {
-            (void)I2C_Soft_WriteByte(HIGH_BYTE(data));
-        }
-    }
-    I2C_Soft_Stop();
+    payload[0] = LOW_BYTE(addr);
+    payload[1] = HIGH_BYTE(addr);
+    payload[2] = LOW_BYTE(data);
+    payload[3] = HIGH_BYTE(data);
+    footer[0] = checksum;
+    footer[1] = (noOfBytes == 1U) ? 0x05U : 0x06U;
 
-    I2C_Soft_Start();
-    if ((I2C_Soft_WriteByte((uint8_t)(BQ_I2C_ADDR << 1)) == E_OK) &&
-        (I2C_Soft_WriteByte(CMD_DIR_RESP_CHKSUM) == E_OK) &&
-        (I2C_Soft_WriteByte(checksum) == E_OK)) {
-        (void)I2C_Soft_WriteByte(noOfBytes == 1U ? 0x05U : 0x06U);
-    }
-    I2C_Soft_Stop();
+    (void)bq76952_write_register(CMD_DIR_SUBCMD_LOW, payload, payload_len);
+    (void)bq76952_write_register(CMD_DIR_RESP_CHKSUM, footer, 2U);
 }
 
 unsigned int bq76952_readDataMemory(unsigned int addr, int size)
 {
-    byte lsb;
+    byte request[2];
+    byte data[2] = {0};
 
-    I2C_Soft_Start();
-    if ((I2C_Soft_WriteByte((uint8_t)(BQ_I2C_ADDR << 1)) != E_OK) ||
-        (I2C_Soft_WriteByte(CMD_DIR_SUBCMD_LOW) != E_OK) ||
-        (I2C_Soft_WriteByte(LOW_BYTE(addr)) != E_OK) ||
-        (I2C_Soft_WriteByte(HIGH_BYTE(addr)) != E_OK)) {
-        I2C_Soft_Stop();
+    request[0] = LOW_BYTE(addr);
+    request[1] = HIGH_BYTE(addr);
+    if (!bq76952_write_register(CMD_DIR_SUBCMD_LOW, request, 2U)) {
         return 0U;
     }
-    I2C_Soft_Stop();
 
     HAL_Delay(2U);
-
-    I2C_Soft_Start();
-    if (I2C_Soft_WriteByte((uint8_t)((BQ_I2C_ADDR << 1) | 0x01U)) != E_OK) {
-        I2C_Soft_Stop();
+    if (!bq76952_read_raw(data, (uint16_t)size)) {
         return 0U;
     }
 
-    lsb = I2C_Soft_ReadByte(size > 1 ? 1U : 0U);
     if (size == 1) {
-        I2C_Soft_Stop();
-        return lsb;
+        return data[0];
     }
 
-    {
-        byte msb = I2C_Soft_ReadByte(0U);
-        I2C_Soft_Stop();
-        return (unsigned int)(((unsigned int)msb << 8) | lsb);
-    }
+    return (unsigned int)(((unsigned int)data[1] << 8) | data[0]);
 }
 
 bool bq76952_isConnected(void)
 {
-    I2C_Soft_Start();
-    if (I2C_Soft_WriteByte((uint8_t)(BQ_I2C_ADDR << 1)) != E_OK) {
-        I2C_Soft_Stop();
-        return false;
-    }
-    I2C_Soft_Stop();
-    return true;
+    return I2C_Soft_WriteData(BQ_I2C_ADDR, NULL, 0U) == E_OK;
 }
 
 void bq76952_reset(void)

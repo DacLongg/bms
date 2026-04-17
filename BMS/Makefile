@@ -44,6 +44,7 @@ Core/Src/rtc.c \
 Core/Src/usart.c \
 Core/Src/stm32l0xx_it.c \
 Core/Src/stm32l0xx_hal_msp.c \
+App/mainapp.c \
 MyDrivers/bq76952/bq76952.c \
 MyDrivers/i2c_soft/i2c_soft.c \
 Drivers/STM32L0xx_HAL_Driver/Src/stm32l0xx_hal_adc.c \
@@ -98,6 +99,13 @@ SZ = $(PREFIX)size
 endif
 HEX = $(CP) -O ihex
 BIN = $(CP) -O binary -S
+ST_FLASH ?= st-flash
+OPENOCD ?= openocd
+GDB ?= arm-none-eabi-gdb
+FLASH_ADDR ?= 0x08000000
+GDB_PORT ?= 3333
+OPENOCD_INTERFACE ?= interface/stlink.cfg
+OPENOCD_TARGET ?= target/stm32l0.cfg
  
 #######################################
 # CFLAGS
@@ -129,6 +137,7 @@ AS_INCLUDES =
 
 # C includes
 C_INCLUDES =  \
+-I. \
 -ICore/Inc \
 -IMyDrivers/bq76952 \
 -IMyDrivers/i2c_soft \
@@ -199,6 +208,35 @@ $(BUILD_DIR)/%.bin: $(BUILD_DIR)/%.elf | $(BUILD_DIR)
 	
 $(BUILD_DIR):
 	mkdir $@		
+
+.PHONY: all clean flash flash-stlink flash-openocd debug-server debug erase check-gdb check-openocd check-stflash
+
+check-stflash:
+	@command -v $(ST_FLASH) >/dev/null 2>&1 || { echo "Missing $(ST_FLASH). Install stlink-tools."; exit 1; }
+
+check-openocd:
+	@command -v $(OPENOCD) >/dev/null 2>&1 || { echo "Missing $(OPENOCD). Install openocd."; exit 1; }
+
+check-gdb:
+	@command -v $(GDB) >/dev/null 2>&1 || { echo "Missing $(GDB). Install gcc-arm-none-eabi or gdb-multiarch."; exit 1; }
+
+flash: flash-stlink
+
+flash-stlink: $(BUILD_DIR)/$(TARGET).bin check-stflash
+	$(ST_FLASH) --reset write $(BUILD_DIR)/$(TARGET).bin $(FLASH_ADDR)
+
+flash-openocd: $(BUILD_DIR)/$(TARGET).elf check-openocd
+	$(OPENOCD) -f $(OPENOCD_INTERFACE) -f $(OPENOCD_TARGET) -c "program $(BUILD_DIR)/$(TARGET).elf verify reset exit"
+
+erase: check-stflash
+	$(ST_FLASH) erase
+
+debug-server: check-openocd
+	$(OPENOCD) -f $(OPENOCD_INTERFACE) -f $(OPENOCD_TARGET)
+
+debug: $(BUILD_DIR)/$(TARGET).elf check-gdb
+	@echo "Start 'make debug-server' in another terminal first."
+	$(GDB) $(BUILD_DIR)/$(TARGET).elf -ex "target extended-remote localhost:$(GDB_PORT)" -ex "monitor reset halt" -ex "load" -ex "monitor reset halt"
 
 #######################################
 # clean up
