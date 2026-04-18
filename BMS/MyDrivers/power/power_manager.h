@@ -31,16 +31,12 @@ typedef struct {
     LPTIM_HandleTypeDef *lptim;
 } power_manager_config_t;
 
-void power_manager_init(const power_manager_config_t *config);
-power_manager_mode_t power_manager_get_mode(void);
+
 HAL_StatusTypeDef power_manager_enter_low_power_sleep(uint32_t auto_wakeup_ms);
 void power_manager_exit_low_power_sleep_to_run(void);
 bool power_manager_is_sleeping(void);
-uint32_t power_manager_get_wakeup_source(void);
-void power_manager_clear_wakeup_source(void);
-uint16_t power_manager_get_last_gpio_pin(void);
-uint8_t power_manager_get_last_uart_byte(void);
-HAL_StatusTypeDef power_manager_enable_uart_wakeup(void);
-HAL_StatusTypeDef power_manager_disable_uart_wakeup(void);
+
+
+
 
 #endif

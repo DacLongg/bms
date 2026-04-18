@@ -45,7 +45,7 @@ Core/Src/usart.c \
 Core/Src/stm32l0xx_it.c \
 Core/Src/stm32l0xx_hal_msp.c \
 App/mainapp.c \
-App/power_manager.c \
+MyDrivers/power/power_manager.c \
 MyDrivers/bq76952/bq76952.c \
 MyDrivers/i2c_soft/i2c_soft.c \
 Drivers/STM32L0xx_HAL_Driver/Src/stm32l0xx_hal_adc.c \

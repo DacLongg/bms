@@ -1,11 +1,18 @@
 #include "bq76952.h"
 
+/* Địa chỉ I2C 7-bit của BQ76952 khi giao tiếp ở chế độ chuẩn. */
 #define BQ_I2C_ADDR 0x08U
 
+/* Vùng thanh ghi command/response trực tiếp của BQ76952.
+ * 0x3E/0x3F: ghi subcommand hoặc data-memory address.
+ * 0x40..   : vùng phản hồi/subcommand data.
+ * 0x60..   : checksum + độ dài khi ghi data memory.
+ */
 #define CMD_DIR_SUBCMD_LOW 0x3EU
 #define CMD_DIR_RESP_START 0x40U
 #define CMD_DIR_RESP_CHKSUM 0x60U
 
+/* Direct commands đọc dữ liệu tức thời. */
 #define CMD_READ_VOLTAGE_STACK 0x34U
 
 #define CMD_DIR_SAFETY_STATUS_A 0x03U
@@ -21,9 +28,11 @@
 #define CMD_DEVICE_NUMBER 0x0001U
 #define CMD_HW_VERSION 0x0003U
 #define CMD_COV_SNAPSHOT 0x0081U
+/* Các subcommand phục vụ chuỗi ghi OTP. */
 #define SUBCMD_OTP_WR_CHECK 0x00A0U
 #define SUBCMD_OTP_WRITE 0x00A1U
 
+/* Vị trí bit trong Safety Status A. */
 #define BIT_SA_SC_DCHG 7U
 #define BIT_SA_OC2_DCHG 6U
 #define BIT_SA_OC1_DCHG 5U
@@ -38,6 +47,7 @@
 #define BIT_SB_UTD 1U
 #define BIT_SB_UTC 0U
 
+/* Mỗi điện áp cell chiếm 2 byte, bắt đầu từ direct command 0x14. */
 #define CELL_NO_TO_ADDR(cell_no) ((byte)(0x14U + ((cell_no) * 2U)))
 #define LOW_BYTE(data) ((byte)((data) & 0x00FFU))
 #define HIGH_BYTE(data) ((byte)(((data) >> 8) & 0x00FFU))
@@ -62,26 +72,31 @@ static byte bq76952_calculateChecksum(byte oldChecksum, byte data);
 static void bq76952_writeDataMemory(unsigned int addr, int16_t data, byte noOfBytes);
 static void bq76952_writeDataMemoryWithoutConfigUpdate(unsigned int addr, int16_t data, byte noOfBytes);
 
+/* Driver hiện tại dùng lớp I2C software riêng thay vì HAL I2C trực tiếp. */
 void bq76952_begin(void)
 {
     I2C_Soft_Init();
 }
 
+/* Ghi liên tiếp len byte vào một thanh ghi bắt đầu tại reg. */
 static bool bq76952_write_register(byte reg, const byte *data, uint16_t len)
 {
     return I2C_Soft_WriteDataFromAddress(BQ_I2C_ADDR, reg, (uint8_t *)data, len) == E_OK;
 }
 
+/* Đọc liên tiếp len byte từ một thanh ghi bắt đầu tại reg. */
 static bool bq76952_read_register(byte reg, byte *data, uint16_t len)
 {
     return I2C_Soft_ReadDataFromAddress(BQ_I2C_ADDR, reg, data, len) == E_OK;
 }
 
+/* Đọc thô từ bus sau khi đã gửi địa chỉ data memory/subcommand trước đó. */
 static bool bq76952_read_raw(byte *data, uint16_t len)
 {
     return I2c_Soft_ReadData(BQ_I2C_ADDR, data, len) == E_OK;
 }
 
+/* Gửi direct command loại 2 byte rồi ghép little-endian thành unsigned int. */
 static unsigned int bq76952_directCommand(byte command)
 {
     byte data[2] = {0};
@@ -93,6 +108,7 @@ static unsigned int bq76952_directCommand(byte command)
     return (unsigned int)(((unsigned int)data[1] << 8) | data[0]);
 }
 
+/* Gửi subcommand 16-bit vào cặp thanh ghi 0x3E/0x3F. */
 static void bq76952_subCommand(unsigned int data)
 {
     byte payload[2];
@@ -102,6 +118,7 @@ static void bq76952_subCommand(unsigned int data)
     (void)bq76952_write_register(CMD_DIR_SUBCMD_LOW, payload, 2U);
 }
 
+/* Đọc phản hồi 16-bit trong vùng response với offset byte tương ứng. */
 static int16_t bq76952_subCommandResponseInt(byte offset)
 {
     byte data[2] = {0};
@@ -113,18 +130,23 @@ static int16_t bq76952_subCommandResponseInt(byte offset)
     return (int16_t)(((uint16_t)data[1] << 8) | data[0]);
 }
 
+/* 0x0090 là subcommand chuẩn để vào Config Update mode. */
 void bq76952_enterConfigUpdate(void)
 {
     bq76952_subCommand(0x0090U);
     HAL_Delay(2U);
 }
 
+/* 0x0092 yêu cầu IC thoát Config Update mode và commit cấu hình. */
 void bq76952_exitConfigUpdate(void)
 {
     bq76952_subCommand(0x0092U);
     HAL_Delay(1U);
 }
 
+/* Checksum của BQ76952 là phép cộng dồn rồi đảo bit ở cuối.
+ * Hàm này được gọi tuần tự cho từng byte trong payload.
+ */
 static byte bq76952_calculateChecksum(byte oldChecksum, byte data)
 {
     if (oldChecksum == 0U) {
@@ -136,6 +158,10 @@ static byte bq76952_calculateChecksum(byte oldChecksum, byte data)
     return (byte)(~oldChecksum);
 }
 
+/* Ghi một mục data memory.
+ * noOfBytes = 1 hoặc 2, footer[1] là tổng độ dài khung theo giao thức BQ76952.
+ * Hàm này tự vào/ra Config Update mode cho từng lần ghi.
+ */
 static void bq76952_writeDataMemory(unsigned int addr, int16_t data, byte noOfBytes)
 {
     byte checksum = 0U;
@@ -162,6 +188,7 @@ static void bq76952_writeDataMemory(unsigned int addr, int16_t data, byte noOfBy
     bq76952_exitConfigUpdate();
 }
 
+/* Giống hàm trên nhưng dùng khi caller đã xử lý mode hoặc cần ghi nhanh nhiều lệnh liên tiếp. */
 static void bq76952_writeDataMemoryWithoutConfigUpdate(unsigned int addr, int16_t data, byte noOfBytes)
 {
     byte checksum = 0U;
@@ -185,6 +212,9 @@ static void bq76952_writeDataMemoryWithoutConfigUpdate(unsigned int addr, int16_
     (void)bq76952_write_register(CMD_DIR_RESP_CHKSUM, footer, 2U);
 }
 
+/* Đọc 1 hoặc 2 byte data memory tại địa chỉ addr.
+ * size nên là 1 hoặc 2; nếu 2 thì kết quả được ghép little-endian.
+ */
 unsigned int bq76952_readDataMemory(unsigned int addr, int size)
 {
     byte request[2];
@@ -213,6 +243,7 @@ bool bq76952_isConnected(void)
     return I2C_Soft_WriteData(BQ_I2C_ADDR, NULL, 0U) == E_OK;
 }
 
+/* 0x0012 là reset mềm thiết bị. */
 void bq76952_reset(void)
 {
     bq76952_subCommand(0x0012U);
@@ -228,6 +259,7 @@ int bq76952_getCellVoltage(byte cellNumber)
     return (int)bq76952_directCommand(CELL_NO_TO_ADDR(cellNumber));
 }
 
+/* Đọc toàn bộ 16 kênh cell của IC, kể cả các kênh không dùng. */
 void bq76952_getAllCellVoltages(int *cellArray)
 {
     if (cellArray == NULL) {
@@ -239,6 +271,9 @@ void bq76952_getAllCellVoltages(int *cellArray)
     }
 }
 
+/* Mapping này phản ánh cách pack hiện tại nối 10 cell vào 16 kênh đo của BQ76952.
+ * Các phần tử bị bỏ qua là các cell sense không được dùng trong phần cứng này.
+ */
 void bq76952_getOnlyConnectedCellVoltages(int *cellArray)
 {
     int allcells[16];
@@ -267,6 +302,7 @@ int bq76952_getCurrent(void)
 
 int bq76952_getCurrentNow(void)
 {
+    /* 0x0075 trả về một block dữ liệu phép đo tức thời; offset 22 là current now. */
     bq76952_subCommand(0x0075U);
     HAL_Delay(1U);
     return bq76952_subCommandResponseInt(22U);
@@ -274,6 +310,7 @@ int bq76952_getCurrentNow(void)
 
 int bq76952_getCurrentAvg(void)
 {
+    /* Cùng block 0x0075, offset 20 là averaged current. */
     bq76952_subCommand(0x0075U);
     HAL_Delay(1U);
     return bq76952_subCommandResponseInt(20U);
@@ -281,6 +318,7 @@ int bq76952_getCurrentAvg(void)
 
 unsigned int bq76952_getManufacturingStatus(void)
 {
+    /* 0x0057 đọc Manufacturing Status, chứa nhiều cờ vận hành như FET_EN, fuse, sleep. */
     bq76952_subCommand(0x0057U);
     HAL_Delay(1U);
     return (unsigned int)bq76952_subCommandResponseInt(0U);
@@ -312,6 +350,7 @@ unsigned int bq76952_getHWVersion(void)
 
 unsigned int bq76952_getCOVSnapshot(byte cell)
 {
+    /* Sau lỗi COV, IC lưu lại snapshot để biết cell nào đạt bao nhiêu điện áp tại thời điểm fault. */
     bq76952_subCommand(CMD_COV_SNAPSHOT);
     HAL_Delay(1U);
     return (unsigned int)bq76952_subCommandResponseInt(cell);
@@ -327,6 +366,7 @@ bool bq76952_is_OTP_already_programmed(void)
 
 bool bq76952_checkSecurityKeys(void)
 {
+    /* 0x0035 đọc liên tiếp 4 word key: unseal step1/2 và full-access step1/2. */
     bq76952_subCommand(0x0035U);
     HAL_Delay(1U);
     g_unseal_key_step_1 = (uint16_t)bq76952_subCommandResponseInt(0U);
@@ -374,6 +414,7 @@ bool bq76952_Enter_FullAccessMode(void)
 {
     bq76952_battery_status_t batt_st;
 
+    /* Nếu key trong chip chưa khớp bộ key của thư viện thì ghi lại bộ key mặc định trước. */
     if (!bq76952_checkSecurityKeys()) {
         bq76952_writeDataMemoryWithoutConfigUpdate(0x925BU, FULL_ACCESS_KEY_STEP_1, 2U);
         bq76952_writeDataMemoryWithoutConfigUpdate(0x925DU, FULL_ACCESS_KEY_STEP_2, 2U);
@@ -383,11 +424,13 @@ bool bq76952_Enter_FullAccessMode(void)
 
     batt_st = bq76952_getBatteryStatusRegister();
     if (batt_st.bits.SECURITY_STATE == 3U) {
+        /* Sealed: cần unseal rồi mới vào full access. */
         bq76952_subCommand(g_unseal_key_step_1);
         bq76952_subCommand(g_unseal_key_step_2);
         bq76952_subCommand(g_full_access_key_step_1);
         bq76952_subCommand(g_full_access_key_step_2);
     } else if (batt_st.bits.SECURITY_STATE == 2U) {
+        /* Unsealed: chỉ cần gửi full-access key. */
         bq76952_subCommand(g_full_access_key_step_1);
         bq76952_subCommand(g_full_access_key_step_2);
     }
@@ -421,6 +464,7 @@ bool bq76952_program_OTP(void)
     bq76952_subCommand(SUBCMD_OTP_WR_CHECK);
     HAL_Delay(1000U);
 
+    /* bit7 của otp_wr_check báo điều kiện ghi hợp lệ; battery status báo có bị block hay không. */
     otp_wr_check = (byte)bq76952_subCommandResponseInt(0U);
     batt_st = bq76952_getBatteryStatusRegister();
     if (((otp_wr_check & 0x80U) == 0U) || batt_st.bits.WR_TO_OTP_BLOCKED) {
@@ -433,11 +477,13 @@ bool bq76952_program_OTP(void)
     HAL_Delay(10U);
     bq76952_exitConfigUpdate();
 
+    /* 0x81 nghĩa là lệnh đã chấp nhận và hoàn tất thành công theo response bitmask hiện tại. */
     return (otp_write_response & 0x81U) == 0x81U;
 }
 
 float bq76952_getInternalTemp(void)
 {
+    /* BQ76952 trả nhiệt độ theo 0.1 Kelvin, cần đổi sang Celsius. */
     float raw = (float)bq76952_directCommand(CMD_DIR_INT_TEMP) / 10.0f;
     return raw - 273.15f;
 }
@@ -446,6 +492,7 @@ float bq76952_getThermistorTemp(bq76952_thermistor_t thermistor)
 {
     byte command = 0x70U;
 
+    /* Mỗi nguồn nhiệt độ có một direct command riêng, cách nhau 2 byte. */
     switch (thermistor) {
     case TS1:
         command = 0x70U;
@@ -504,6 +551,7 @@ bq76952_temp_t bq76952_getTemperatureStatus(void)
     bq76952_temp_t status = {0};
     byte regData = (byte)bq76952_directCommand(CMD_DIR_FTEMP);
 
+    /* FTEMP là bitmap trạng thái nhiệt, không phải giá trị nhiệt độ tuyệt đối. */
     status.bits.OVERTEMP_FET = BQ_READ_STATUS_BIT(regData, BIT_SB_OTC);
     status.bits.OVERTEMP_INTERNAL = BQ_READ_STATUS_BIT(regData, BIT_SB_OTINT);
     status.bits.OVERTEMP_DCHG = BQ_READ_STATUS_BIT(regData, BIT_SB_OTD);
@@ -517,6 +565,7 @@ bq76952_temp_t bq76952_getTemperatureStatus(void)
 
 void bq76952_setFET(bq76952_fet_t fet, bq76952_fet_state_t state)
 {
+    /* Mặc định 0x0096 là ALL_FETS_ON; các nhánh OFF dùng subcommand riêng cho CHG/DSG/ALL. */
     unsigned int subcmd = 0x0096U;
 
     if (state == OFF) {
@@ -554,9 +603,13 @@ bool bq76952_isDischarging(void)
 
 void bq76952_setCellOvervoltageProtection(unsigned int mv, unsigned int ms)
 {
+    /* Cell OV threshold trong data memory dùng bước ~50.6 mV/LSB.
+     * Delay dùng bước ~3.3 ms và mã hóa theo công thức datasheet: code = time/3.3 - 2.
+     */
     byte thresh = (byte)(mv / 50.6f);
     uint16_t dly = (uint16_t)(ms / 3.3f) - 2U;
 
+    /* 86 ~ 4.35 V, 74 ~ khoảng 250 ms: đây là fallback an toàn của thư viện. */
     if (thresh < 20U || thresh > 110U) {
         thresh = 86U;
     }
@@ -570,6 +623,7 @@ void bq76952_setCellOvervoltageProtection(unsigned int mv, unsigned int ms)
 
 void bq76952_setCellUndervoltageProtection(unsigned int mv, unsigned int ms)
 {
+    /* UV cũng dùng bước ~50.6 mV/LSB và delay cùng công thức với OV. */
     byte thresh = (byte)(mv / 50.6f);
     uint16_t dly = (uint16_t)(ms / 3.3f) - 2U;
 
@@ -586,12 +640,17 @@ void bq76952_setCellUndervoltageProtection(unsigned int mv, unsigned int ms)
 
 void bq76952_setShortCircuitThreshold(void)
 {
+    /* Preset hiện tại:
+     * threshold code = 2 và delay code = 30.
+     * Ý nghĩa vật lý phụ thuộc Rsense và bảng mã SCD trong datasheet.
+     */
     bq76952_writeDataMemory(SCD_THRESHOLD_CONFIG, 2, 1U);
     bq76952_writeDataMemory(SCD_DELAY_CONFIG, 30, 1U);
 }
 
 void bq76952_setProtectionConfiguration(void)
 {
+    /* 0x0600 là bitmask cấu hình cách protection phản ứng/latch theo lựa chọn của dự án. */
     bq76952_writeDataMemory(PROTECTION_CONFIGURATION, 0x0600, 2U);
 }
 
@@ -602,6 +661,7 @@ void bq76952_setShutdownStackVoltage(unsigned int voltage)
 
 void bq76952_setChargingOvercurrentProtection(unsigned int mv, byte ms)
 {
+    /* COC dùng bước 2 mV/LSB trên shunt; delay cũng dùng khoảng 3.3 ms/LSB. */
     byte thresh = (byte)(mv / 2U);
     byte dly = (byte)(ms / 3.3f) - 2U;
 
@@ -618,6 +678,7 @@ void bq76952_setChargingOvercurrentProtection(unsigned int mv, byte ms)
 
 void bq76952_setDischargingOvercurrentProtection(unsigned int mv, byte ms)
 {
+    /* Ghi cùng ngưỡng cho OCD1 và OCD2, nhưng delay được ghi ở vùng OCD1 delay. */
     byte thresh = (byte)(mv / 2U);
     byte dly = (byte)(ms / 3.3f) - 2U;
 
@@ -636,6 +697,7 @@ void bq76952_setDischargingOvercurrentProtection(unsigned int mv, byte ms)
 
 void bq76952_setDischargingOvercurrentProtection_OCD3(int16_t mA)
 {
+    /* OCD3 dùng giá trị dòng theo đơn vị và dấu được BQ76952 định nghĩa trong data memory. */
     bq76952_writeDataMemory(0x928AU, mA, 2U);
 }
 
@@ -646,6 +708,7 @@ void bq76952_setDischargingOvercurrentProtection_Recovery(int16_t mA)
 
 void bq76952_setDischargingShortcircuitProtection(bq76952_scd_thresh_t thresh, unsigned int us)
 {
+    /* Delay SCD xấp xỉ 15 us/LSB, thư viện cộng 1 để tránh code 0. */
     byte dly = (byte)(us / 15U) + 1U;
 
     if (dly < 1U || dly > 31U) {
@@ -658,6 +721,7 @@ void bq76952_setDischargingShortcircuitProtection(bq76952_scd_thresh_t thresh, u
 
 void bq76952_setChargingTemperatureMaxLimit(int temp, byte sec)
 {
+    /* Giới hạn temp lưu trực tiếp theo độ C nguyên; sec là thời gian xác nhận lỗi. */
     if (temp < -40 || temp > 120) {
         temp = 55;
     }
@@ -678,11 +742,13 @@ void bq76952_setDischargingTemperatureMaxLimit(int temp, byte sec)
 
 void bq76952_setEnablePreRegulator(void)
 {
+    /* REG0 bit0 = bật pre-regulator. */
     bq76952_writeDataMemory(REG0_CONFIG, 0x01, 1U);
 }
 
 void bq76952_setDA_Config(void)
 {
+    /* 0x01 là preset DA configuration mà project này đang dùng. */
     bq76952_writeDataMemory(DA_CONFIGURATION, 0x01, 1U);
 }
 
@@ -703,6 +769,7 @@ void bq76952_setSF_AlertMask_C(void)
 
 void bq76952_setEnableRegulator(bool enable_reg1, bool enable_reg2)
 {
+    /* 0xCC giữ các bit nền của REG12_CONTROL, sau đó OR thêm bit enable cho REG1/REG2. */
     byte reg12 = 0xCCU;
 
     reg12 |= enable_reg1 ? 0x01U : 0x00U;
@@ -712,21 +779,25 @@ void bq76952_setEnableRegulator(bool enable_reg1, bool enable_reg2)
 
 void bq76952_setAlertPinConfig(void)
 {
+    /* 0x2A quy định mode chân ALERT theo cấu hình phần cứng mong muốn của dự án. */
     bq76952_writeDataMemory(ALERT_PIN_CONFIG, 0x2A, 1U);
 }
 
 void bq76952_setDefaultAlarmMaskConfig(void)
 {
+    /* 0xF800 mask/bật nhóm alarm tương ứng trong Default Alarm Mask. */
     bq76952_writeDataMemory(DEFAULT_ALARM_MASK_CONFIG, (int16_t)0xF800U, 2U);
 }
 
 void bq76952_setVcellMode(uint16_t vcell_mode)
 {
+    /* Mỗi bit tương ứng một kênh VCx; bit = 1 nghĩa là tham gia đo điện áp cell. */
     bq76952_writeDataMemory(VCELL_MODE, (int16_t)vcell_mode, 2U);
 }
 
 void bq76952_setEnableCHG_FET_Protection(void)
 {
+    /* Ghi 0 để bỏ chặn các protection trên CHG FET theo preset hiện tại. */
     bq76952_writeDataMemory(CHG_FET_PROTECTION_A, 0x00, 1U);
     bq76952_writeDataMemory(CHG_FET_PROTECTION_B, 0x00, 1U);
     bq76952_writeDataMemory(CHG_FET_PROTECTION_C, 0x00, 1U);
@@ -734,6 +805,7 @@ void bq76952_setEnableCHG_FET_Protection(void)
 
 void bq76952_setEnableProtectionsA(void)
 {
+    /* 0xFC bật hầu hết protection nhóm A, trừ các bit thấp không dùng. */
     bq76952_writeDataMemory(ENABLE_PROTECTIONS_A, 0xFC, 1U);
 }
 
@@ -744,6 +816,7 @@ void bq76952_setEnableProtectionsB(void)
 
 void bq76952_setEnableProtectionsC(void)
 {
+    /* 0x80 hiện chỉ bật protection bit cao của nhóm C. */
     bq76952_writeDataMemory(ENABLE_PROTECTIONS_C, 0x80, 1U);
 }
 
@@ -754,6 +827,7 @@ void bq76952_setCHGFETProtectionsA(byte val)
 
 void bq76952_setCellInterconnectResistances(void)
 {
+    /* Ghi tuần tự 16 mục vì BQ76952 cho phép hiệu chỉnh riêng từng liên kết cell sense. */
     for (byte cell = 0U; cell < 16U; ++cell) {
         bq76952_writeDataMemory(CELL_INTERCONNECT_RESISTANCE + ((unsigned int)cell * 2U),
                                 CELL_INTERCONNECT_RESISTANCE_MOHM,
@@ -763,6 +837,7 @@ void bq76952_setCellInterconnectResistances(void)
 
 void bq76952_setDSGFETProtectionsA(void)
 {
+    /* 0xA4 là preset mapping fault -> DSG FET action của dự án. */
     bq76952_writeDataMemory(DSG_FET_PROTECTION_A, 0xA4, 1U);
 }
 
@@ -778,6 +853,7 @@ void bq76952_setDSGFETProtectionsC(void)
 
 void bq76952_setFET_Options(void)
 {
+    /* 0x1D cấu hình hành vi FET/precharge/predischarge theo thiết kế board hiện tại. */
     bq76952_writeDataMemory(FET_OPTIONS, 0x1D, 1U);
 }
 
@@ -788,6 +864,7 @@ void bq76952_setFET_PredischargeTimeout(void)
 
 void bq76952_setFET_PredischargeStopDelta(void)
 {
+    /* 100 là delta điện áp kết thúc predischarge theo đơn vị mã hóa của BQ76952. */
     bq76952_writeDataMemory(FET_PREDISCHARGE_STOP_DELTA, 100, 1U);
 }
 
@@ -829,6 +906,7 @@ void bq76952_init(I2C_HandleTypeDef *hi2c)
     g_bq76952_hi2c = hi2c;
     bq76952_begin();
 
+    /* Chờ IC hoàn tất power-up trước khi đọc metadata và ghi cấu hình. */
     HAL_Delay(1000U);
 
     devNumber = bq76952_getDeviceNumber();
@@ -837,6 +915,11 @@ void bq76952_init(I2C_HandleTypeDef *hi2c)
     (void)hwVersion;
     (void)g_bq76952_hi2c;
 
+    /* Chuỗi dưới đây là preset khởi tạo mặc định cho pack hiện tại:
+     * - bật đo cell theo bitmask 0xAAAF
+     * - bật protection cần thiết
+     * - cấu hình FET và một số ngưỡng an toàn mặc định
+     */
     bq76952_setVcellMode(0xAAAFU);
     bq76952_setDA_Config();
     bq76952_setEnableProtectionsA();
@@ -862,6 +945,7 @@ void bq76952_init(I2C_HandleTypeDef *hi2c)
         bq76952_setFET_ENABLE();
     }
 
+    /* Đọc raw alert một lần để đồng bộ trạng thái ban đầu. */
     HAL_Delay(500U);
     (void)bq76952_getAlertRawStatusRegister();
 }
@@ -889,6 +973,7 @@ void bq76952_check_batt_status(void)
     bq76952_protection_t status;
     bq76952_safety_alert_c_t safety_alert_c;
 
+    /* Hàm này chủ yếu phục vụ debug/runtime inspection, chưa có logic xử lý fault hoàn chỉnh. */
     HAL_Delay(50U);
     bq76952_getAllCellVoltages(cellArray);
     alarmStatus = bq76952_getAlertStatusRegister();
