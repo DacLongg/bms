@@ -1,51 +1,52 @@
 #include "bq76952.h"
 
 /* Địa chỉ I2C 7-bit của BQ76952 khi giao tiếp ở chế độ chuẩn. */
-#define BQ_I2C_ADDR 0x08U
+#define BQ_I2C_ADDR                 0x08U
 
 /* Vùng thanh ghi command/response trực tiếp của BQ76952.
  * 0x3E/0x3F: ghi subcommand hoặc data-memory address.
  * 0x40..   : vùng phản hồi/subcommand data.
  * 0x60..   : checksum + độ dài khi ghi data memory.
  */
-#define CMD_DIR_SUBCMD_LOW 0x3EU
-#define CMD_DIR_RESP_START 0x40U
-#define CMD_DIR_RESP_CHKSUM 0x60U
+#define CMD_DIR_SUBCMD_LOW          0x3EU
+#define CMD_DIR_RESP_START          0x40U
+#define CMD_DIR_RESP_CHKSUM         0x60U
 
 /* Direct commands đọc dữ liệu tức thời. */
-#define CMD_READ_VOLTAGE_STACK 0x34U
+#define CMD_READ_VOLTAGE_STACK      0x34U
 
-#define CMD_DIR_SAFETY_STATUS_A 0x03U
-#define CMD_DIR_SAFETY_ALERT_C 0x06U
-#define CMD_DIR_FTEMP 0x05U
-#define CMD_DIR_BATTERY_STATUS 0x12U
-#define CMD_DIR_CC2_CUR 0x3AU
-#define CMD_DIR_ALARM_STATUS 0x62U
-#define CMD_DIR_ALARM_RAW_STATUS 0x64U
-#define CMD_DIR_INT_TEMP 0x68U
-#define CMD_DIR_FET_STAT 0x7FU
+#define CMD_DIR_SAFETY_STATUS_A     0x03U
+#define CMD_DIR_SAFETY_ALERT_C      0x06U
+#define CMD_DIR_FTEMP               0x05U
+#define CMD_DIR_BATTERY_STATUS      0x12U
+#define CMD_DIR_CC2_CUR             0x3AU
+#define CMD_DIR_ALARM_STATUS        0x62U
+#define CMD_DIR_ALARM_RAW_STATUS    0x64U
+#define CMD_DIR_INT_TEMP            0x68U
+#define CMD_DIR_FET_STAT            0x7FU
 
-#define CMD_DEVICE_NUMBER 0x0001U
-#define CMD_HW_VERSION 0x0003U
-#define CMD_COV_SNAPSHOT 0x0081U
+#define CMD_DEVICE_NUMBER           0x0001U
+#define CMD_HW_VERSION              0x0003U
+#define CMD_COV_SNAPSHOT            0x0081U
 /* Các subcommand phục vụ chuỗi ghi OTP. */
-#define SUBCMD_OTP_WR_CHECK 0x00A0U
-#define SUBCMD_OTP_WRITE 0x00A1U
+#define SUBCMD_OTP_WR_CHECK         0x00A0U
+#define SUBCMD_OTP_WRITE            0x00A1U
 
 /* Vị trí bit trong Safety Status A. */
-#define BIT_SA_SC_DCHG 7U
-#define BIT_SA_OC2_DCHG 6U
-#define BIT_SA_OC1_DCHG 5U
-#define BIT_SA_OC_CHG 4U
-#define BIT_SA_CELL_OV 3U
-#define BIT_SA_CELL_UV 2U
+#define BIT_SA_SC_DCHG              7U
+#define BIT_SA_OC2_DCHG             6U
+#define BIT_SA_OC1_DCHG             5U
+#define BIT_SA_OC_CHG               4U
+#define BIT_SA_CELL_OV              3U
+#define BIT_SA_CELL_UV              2U
 
-#define BIT_SB_OTINT 6U
-#define BIT_SB_OTD 5U
-#define BIT_SB_OTC 4U
-#define BIT_SB_UTINT 2U
-#define BIT_SB_UTD 1U
-#define BIT_SB_UTC 0U
+/* Vị trí bit trong Safety Status B. */
+#define BIT_SB_OTINT                6U
+#define BIT_SB_OTD                  5U
+#define BIT_SB_OTC                  4U
+#define BIT_SB_UTINT                2U
+#define BIT_SB_UTD                  1U
+#define BIT_SB_UTC                  0U
 
 /* Mỗi điện áp cell chiếm 2 byte, bắt đầu từ direct command 0x14. */
 #define CELL_NO_TO_ADDR(cell_no) ((byte)(0x14U + ((cell_no) * 2U)))
@@ -53,9 +54,8 @@
 #define HIGH_BYTE(data) ((byte)(((data) >> 8) & 0x00FFU))
 #define BQ_READ_STATUS_BIT(value, bit) (((value) >> (bit)) & 0x01U)
 
-static I2C_HandleTypeDef *g_bq76952_hi2c;
 
-static bq76952_protection_t g_protection_status;
+static bq76952_protection_t     g_protection_status;
 static bq76952_safety_alert_c_t g_safety_alert_c;
 static uint16_t g_unseal_key_step_1;
 static uint16_t g_unseal_key_step_2;
@@ -324,16 +324,6 @@ unsigned int bq76952_getManufacturingStatus(void)
     return (unsigned int)bq76952_subCommandResponseInt(0U);
 }
 
-bool bq76952_areFETs_Enabled(void)
-{
-    return (bq76952_getManufacturingStatus() & 0x10U) != 0U;
-}
-
-unsigned int bq76952_getStackVoltage(void)
-{
-    return bq76952_directCommand(CMD_READ_VOLTAGE_STACK);
-}
-
 unsigned int bq76952_getDeviceNumber(void)
 {
     bq76952_subCommand(CMD_DEVICE_NUMBER);
@@ -347,6 +337,17 @@ unsigned int bq76952_getHWVersion(void)
     HAL_Delay(1U);
     return (unsigned int)bq76952_subCommandResponseInt(0U);
 }
+
+bool bq76952_areFETs_Enabled(void)
+{
+    return (bq76952_getManufacturingStatus() & 0x10U) != 0U;
+}
+
+unsigned int bq76952_getStackVoltage(void)
+{
+    return bq76952_directCommand(CMD_READ_VOLTAGE_STACK);
+}
+
 
 unsigned int bq76952_getCOVSnapshot(byte cell)
 {
@@ -898,12 +899,11 @@ byte bq76952_HandleAlarm(void)
     return (byte)bq76952_getAlertStatusRegister();
 }
 
-void bq76952_init(I2C_HandleTypeDef *hi2c)
+void bq76952_init(void)
 {
     unsigned int hwVersion;
     unsigned int devNumber;
 
-    g_bq76952_hi2c = hi2c;
     bq76952_begin();
 
     /* Chờ IC hoàn tất power-up trước khi đọc metadata và ghi cấu hình. */
@@ -913,7 +913,6 @@ void bq76952_init(I2C_HandleTypeDef *hi2c)
     hwVersion = bq76952_getHWVersion();
     (void)devNumber;
     (void)hwVersion;
-    (void)g_bq76952_hi2c;
 
     /* Chuỗi dưới đây là preset khởi tạo mặc định cho pack hiện tại:
      * - bật đo cell theo bitmask 0xAAAF

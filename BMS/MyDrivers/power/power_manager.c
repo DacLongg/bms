@@ -43,15 +43,10 @@ HAL_StatusTypeDef power_manager_enter_low_power_sleep(uint32_t auto_wakeup_ms)
 void power_manager_exit_low_power_sleep_to_run(void)
 {
     HAL_ResumeTick();
-
-    if ((&hrtc != NULL)) {
-        (void)HAL_RTCEx_DeactivateWakeUpTimer(&hrtc);
-    }
-
+    (void)HAL_RTCEx_DeactivateWakeUpTimer(&hrtc);
 }
 
 void HAL_RTCEx_WakeUpTimerEventCallback(RTC_HandleTypeDef *hrtc)
 {
 
 }
-

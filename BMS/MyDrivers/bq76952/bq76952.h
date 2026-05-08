@@ -203,7 +203,7 @@ typedef union {
 } bq76952_battery_status_t;
 
 /* Khởi tạo driver và chạy chuỗi cấu hình mặc định cho BQ76952. */
-void bq76952_init(I2C_HandleTypeDef *hi2c);
+void bq76952_init(void);
 /* Khởi tạo tầng I2C software dùng bởi driver này. */
 void bq76952_begin(void);
 /* Reset mềm IC bằng subcommand reset. */
