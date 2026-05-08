@@ -45,7 +45,7 @@ Core/Src/usart.c \
 Core/Src/stm32l0xx_it.c \
 Core/Src/stm32l0xx_hal_msp.c \
 App/mainapp.c \
-../MyMiddlewares/bms/bms.c \
+MyMiddlewares/bms/bms.c \
 MyDrivers/power/power_manager.c \
 MyDrivers/bq76952/bq76952.c \
 MyDrivers/i2c_soft/i2c_soft.c \
@@ -141,7 +141,7 @@ AS_INCLUDES =
 C_INCLUDES =  \
 -I. \
 -ICore/Inc \
--I../MyMiddlewares/bms \
+-IMyMiddlewares/bms \
 -IMyDrivers/bq76952 \
 -IMyDrivers/i2c_soft \
 -IDrivers/STM32L0xx_HAL_Driver/Inc \

@@ -98,6 +98,7 @@ typedef enum {
 #define TS1_CONFIG 0x92FDU
 #define TS2_CONFIG 0x92FEU
 #define TS3_CONFIG 0x92FFU
+#define BALANCING_CONFIGURATION 0x9335U
 
 #define UNSEAL_KEY_STEP_1 0x0414U
 #define UNSEAL_KEY_STEP_2 0x3672U
@@ -202,7 +203,7 @@ typedef union {
     } bits;
 } bq76952_battery_status_t;
 
-/* Khởi tạo driver và chạy chuỗi cấu hình mặc định cho BQ76952. */
+/* Khởi tạo driver/I2C và kiểm tra metadata cơ bản; BMS chịu trách nhiệm cấu hình runtime. */
 void bq76952_init(void);
 /* Khởi tạo tầng I2C software dùng bởi driver này. */
 void bq76952_begin(void);
@@ -252,6 +253,12 @@ void bq76952_setFET_ENABLE(void);
 bool bq76952_isDischarging(void);
 /* Trả về true nếu đường sạc đang bật. */
 bool bq76952_isCharging(void);
+/* Bật/tắt host/manual cell balancing trong data memory của BQ. */
+void bq76952_setCellBalancingEnabled(bool enabled);
+/* Gửi mask cân bằng theo cell logic 0..9 của pack, driver tự đổi sang bit VC của BQ. */
+void bq76952_setCellBalanceMask(uint16_t logical_cell_mask);
+/* Đọc mask cell balancing active dạng bit VC gốc của BQ. */
+uint16_t bq76952_getCellBalanceActiveMask(void);
 /* Cấu hình ngưỡng Cell OV và thời gian debounce, đầu vào theo mV/ms. */
 void bq76952_setCellOvervoltageProtection(unsigned int mv, unsigned int ms);
 /* Cấu hình ngưỡng Cell UV và thời gian debounce, đầu vào theo mV/ms. */

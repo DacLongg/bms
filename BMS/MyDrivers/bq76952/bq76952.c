@@ -28,6 +28,7 @@
 #define CMD_DEVICE_NUMBER           0x0001U
 #define CMD_HW_VERSION              0x0003U
 #define CMD_COV_SNAPSHOT            0x0081U
+#define SUBCMD_CB_ACTIVE_CELLS      0x0083U
 /* Các subcommand phục vụ chuỗi ghi OTP. */
 #define SUBCMD_OTP_WR_CHECK         0x00A0U
 #define SUBCMD_OTP_WRITE            0x00A1U
@@ -61,12 +62,16 @@ static uint16_t g_unseal_key_step_1;
 static uint16_t g_unseal_key_step_2;
 static uint16_t g_full_access_key_step_1;
 static uint16_t g_full_access_key_step_2;
+static const byte g_connected_cell_to_vc_bit[10] = {
+    0U, 1U, 2U, 3U, 5U, 7U, 9U, 11U, 13U, 15U
+};
 
 static bool bq76952_write_register(byte reg, const byte *data, uint16_t len);
 static bool bq76952_read_register(byte reg, byte *data, uint16_t len);
 static bool bq76952_read_raw(byte *data, uint16_t len);
 static unsigned int bq76952_directCommand(byte command);
 static void bq76952_subCommand(unsigned int data);
+static void bq76952_subCommandWithU16Data(unsigned int command, uint16_t data);
 static int16_t bq76952_subCommandResponseInt(byte offset);
 static byte bq76952_calculateChecksum(byte oldChecksum, byte data);
 static void bq76952_writeDataMemory(unsigned int addr, int16_t data, byte noOfBytes);
@@ -116,6 +121,29 @@ static void bq76952_subCommand(unsigned int data)
     payload[0] = LOW_BYTE(data);
     payload[1] = HIGH_BYTE(data);
     (void)bq76952_write_register(CMD_DIR_SUBCMD_LOW, payload, 2U);
+}
+
+/* Gửi subcommand có payload 16-bit. Dùng cho các lệnh runtime như manual cell balance. */
+static void bq76952_subCommandWithU16Data(unsigned int command, uint16_t data)
+{
+    byte payload[4];
+    byte footer[2];
+    byte checksum = 0U;
+
+    payload[0] = LOW_BYTE(command);
+    payload[1] = HIGH_BYTE(command);
+    payload[2] = LOW_BYTE(data);
+    payload[3] = HIGH_BYTE(data);
+
+    for (byte i = 0U; i < 4U; ++i) {
+        checksum = bq76952_calculateChecksum(checksum, payload[i]);
+    }
+
+    footer[0] = checksum;
+    footer[1] = 0x06U;
+
+    (void)bq76952_write_register(CMD_DIR_SUBCMD_LOW, payload, 4U);
+    (void)bq76952_write_register(CMD_DIR_RESP_CHKSUM, footer, 2U);
 }
 
 /* Đọc phản hồi 16-bit trong vùng response với offset byte tương ứng. */
@@ -602,6 +630,32 @@ bool bq76952_isDischarging(void)
     return ((byte)bq76952_directCommand(CMD_DIR_FET_STAT) & 0x04U) != 0U;
 }
 
+void bq76952_setCellBalancingEnabled(bool enabled)
+{
+    /* 0x0C giữ CB_NO_CMD = 0 để host command 0x0083 được nhận, tắt autonomous CB_CHG/CB_RLX. */
+    bq76952_writeDataMemory(BALANCING_CONFIGURATION, enabled ? 0x0C : 0x10, 1U);
+}
+
+void bq76952_setCellBalanceMask(uint16_t logical_cell_mask)
+{
+    uint16_t bq_vc_mask = 0U;
+
+    for (byte cell = 0U; cell < 10U; ++cell) {
+        if ((logical_cell_mask & (uint16_t)(1U << cell)) != 0U) {
+            bq_vc_mask |= (uint16_t)(1U << g_connected_cell_to_vc_bit[cell]);
+        }
+    }
+
+    bq76952_subCommandWithU16Data(SUBCMD_CB_ACTIVE_CELLS, bq_vc_mask);
+}
+
+uint16_t bq76952_getCellBalanceActiveMask(void)
+{
+    bq76952_subCommand(SUBCMD_CB_ACTIVE_CELLS);
+    HAL_Delay(1U);
+    return (uint16_t)bq76952_subCommandResponseInt(0U);
+}
+
 void bq76952_setCellOvervoltageProtection(unsigned int mv, unsigned int ms)
 {
     /* Cell OV threshold trong data memory dùng bước ~50.6 mV/LSB.
@@ -871,17 +925,17 @@ void bq76952_setFET_PredischargeStopDelta(void)
 
 void bq76952_setEnableTS1(void)
 {
-    bq76952_writeDataMemory(TS1_CONFIG, 0x00, 1U);
+    bq76952_writeDataMemory(TS1_CONFIG, 0x07, 1U);
 }
 
 void bq76952_setEnableTS2(void)
 {
-    bq76952_writeDataMemory(TS2_CONFIG, 0x00, 1U);
+    bq76952_writeDataMemory(TS2_CONFIG, 0x07, 1U);
 }
 
 void bq76952_setEnableTS3(void)
 {
-    bq76952_writeDataMemory(TS3_CONFIG, 0x00, 1U);
+    bq76952_writeDataMemory(TS3_CONFIG, 0x07, 1U);
 }
 
 unsigned int bq76952_getAlertStatusRegister(void)
@@ -914,38 +968,7 @@ void bq76952_init(void)
     (void)devNumber;
     (void)hwVersion;
 
-    /* Chuỗi dưới đây là preset khởi tạo mặc định cho pack hiện tại:
-     * - bật đo cell theo bitmask 0xAAAF
-     * - bật protection cần thiết
-     * - cấu hình FET và một số ngưỡng an toàn mặc định
-     */
-    bq76952_setVcellMode(0xAAAFU);
-    bq76952_setDA_Config();
-    bq76952_setEnableProtectionsA();
-    bq76952_setEnableProtectionsC();
-    bq76952_setEnableCHG_FET_Protection();
-    bq76952_setProtectionConfiguration();
-    bq76952_setEnableTS1();
-    bq76952_setShortCircuitThreshold();
-    bq76952_setFET_Options();
-    bq76952_setFET_PredischargeTimeout();
-    bq76952_setFET_PredischargeStopDelta();
-    bq76952_setDischargingOvercurrentProtection(4U, 255U);
-    bq76952_setDischargingOvercurrentProtection_Recovery(-3000);
-    bq76952_setDischargingOvercurrentProtection_OCD3(-1000);
-    bq76952_setCellOvervoltageProtection(4200U, 100U);
-    bq76952_setCellUndervoltageProtection(1500U, 100U);
-    bq76952_setDSGFETProtectionsA();
-    bq76952_setDSGFETProtectionsB();
-    bq76952_setDSGFETProtectionsC();
-
-    HAL_Delay(500U);
-    if (!bq76952_areFETs_Enabled()) {
-        bq76952_setFET_ENABLE();
-    }
-
     /* Đọc raw alert một lần để đồng bộ trạng thái ban đầu. */
-    HAL_Delay(500U);
     (void)bq76952_getAlertRawStatusRegister();
 }
 
