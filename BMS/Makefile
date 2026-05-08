@@ -49,6 +49,8 @@ MyMiddlewares/bms/bms.c \
 MyDrivers/power/power_manager.c \
 MyDrivers/bq76952/bq76952.c \
 MyDrivers/i2c_soft/i2c_soft.c \
+MyDrivers/debug_log/debug_log.c \
+MyDrivers/storage_flash/storage_flash.c \
 Drivers/STM32L0xx_HAL_Driver/Src/stm32l0xx_hal_adc.c \
 Drivers/STM32L0xx_HAL_Driver/Src/stm32l0xx_hal_adc_ex.c \
 Drivers/STM32L0xx_HAL_Driver/Src/stm32l0xx_hal.c \
@@ -144,6 +146,8 @@ C_INCLUDES =  \
 -IMyMiddlewares/bms \
 -IMyDrivers/bq76952 \
 -IMyDrivers/i2c_soft \
+-IMyDrivers/debug_log \
+-IMyDrivers/storage_flash \
 -IDrivers/STM32L0xx_HAL_Driver/Inc \
 -IDrivers/STM32L0xx_HAL_Driver/Inc/Legacy \
 -IDrivers/CMSIS/Device/ST/STM32L0xx/Include \

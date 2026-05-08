@@ -4,6 +4,8 @@ Tai lieu nay mo ta luong hoat dong cua firmware BMS hien tai. Thiet ke duoc chia
 
 - `BMS/MyMiddlewares/bms`: quan ly trang thai pack/cell, protection policy, FET policy, coulomb counter va cell balancing.
 - `BMS/MyDrivers/bq76952`: chi cung cap API giao tiep voi BQ76952, doc du lieu, cau hinh data memory, dieu khien FET va nhan mask cell balancing.
+- `BMS/MyDrivers/debug_log`: log debug qua USART2, co the tat bang macro.
+- `BMS/MyDrivers/storage_flash`: luu cac thong so can giu lai sau mat nguon vao Flash cuoi chip.
 - `BMS/App/mainapp.c`: goi init mot lan va goi `BMS_Update()` theo chu ky 100 ms.
 
 ## 1. Entry Point
@@ -37,6 +39,8 @@ Chu ky 100 ms dung de doc cell voltage, pack voltage, current, temperature, cap 
 4. Neu mat ket noi, goi `BMS_Error_Handler()` de tat FET va tat balancing.
 5. Neu ket noi OK, goi `BMS_ConfigureMonitor()` de cau hinh BQ theo policy cua BMS.
 6. Luu tick ban dau va goi `BMS_Update()` mot lan de nap du lieu tracking.
+
+Truoc khi vao vong `mainapp()`, `main.c` khoi tao USART2 va goi `debug_log_init(&huart2)`. Sau do cac macro `BMS_LOG_INFO`, `BMS_LOG_WARN`, `BMS_LOG_ERROR` co the ghi log ra USART2.
 
 ## 3. BQ Configuration Owned By BMS
 
@@ -267,7 +271,61 @@ Neu co fault, khong can balancing, hoac dang xa, BMS gui mask `0` de tat balanci
 - Danh dau `chargeDisabled` va `dischargeDisabled`.
 - Cap nhat tracking ve trang thai khong an toan.
 
-## 14. Configuration Values To Review On Hardware
+## 14. Debug Log Over USART2
+
+Log debug dung `USART2` da duoc CubeMX cau hinh san:
+
+- Baudrate: `115200`.
+- TX/RX: theo cau hinh `MX_USART2_UART_Init()`.
+- API: `debug_log_init()`, `BMS_LOG_INFO()`, `BMS_LOG_WARN()`, `BMS_LOG_ERROR()`.
+
+Tat log bang cach define:
+
+```c
+#define BMS_DEBUG_LOG_ENABLE 0
+```
+
+Co the dat macro nay trong compiler flags hoac truoc khi include `debug_log.h`.
+
+Log hien tai duoc ghi tai cac su kien:
+
+- Boot.
+- BMS init.
+- BQ khong ket noi hoac mat communication.
+- Cau hinh BQ xong.
+- Doi BMS state.
+- Bat/tat hoac doi mask balancing.
+- Load/save Flash persistent data.
+
+Log khong ghi moi 100 ms de tranh spam UART va lam cham control loop.
+
+## 15. Flash Persistent Storage
+
+`storage_flash` chua 1 record nho de luu cac thong so can giu sau mat nguon:
+
+- `chargeThroughput_mAh`
+- `dischargeThroughput_mAh`
+- `equivalentCycle_milliCycles`
+- `nominalCapacity_mAh`
+- `writeCounter`
+
+Vung Flash dung de luu:
+
+- Base address: `0x08007C00`.
+- Size: `1024 bytes`.
+- Page size STM32L0: `128 bytes`.
+- Linker script da giam `FLASH` xuong `31K`, de lai 1 KB cuoi Flash cho storage.
+
+`BMS_LoadPersistedData()` doc record khi khoi dong. Neu record sai magic/version/checksum thi dung default.
+
+`BMS_SavePersistedDataIfNeeded()` chi ghi lai khi:
+
+- Da qua `BMS_FLASH_SAVE_INTERVAL_MS`, va
+- `chargeThroughput_mAh` hoac `dischargeThroughput_mAh` tang it nhat `BMS_FLASH_SAVE_DELTA_MAH`.
+
+Muc dich la giam so lan erase/write Flash.
+
+## 16. Configuration Values To Review On Hardware
 
 Cac gia tri can xac nhan bang do thuc te:
 
@@ -278,7 +336,7 @@ Cac gia tri can xac nhan bang do thuc te:
 - `BMS_BALANCE_MIN_CELL_MV`: nguong cho phep xa can bang.
 - TS1/TS2 co dung NTC 10 k va model `0x07` hay can custom thermistor coefficients.
 
-## 15. Runtime Data For Debug
+## 17. Runtime Data For Debug
 
 Lay con tro tracking bang:
 

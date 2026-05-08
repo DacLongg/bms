@@ -34,6 +34,8 @@
 #define BMS_BQ_SENSE_RESISTOR_UOHM                  50UL
 #define BMS_BQ_PROTECTION_DELAY_MS                  100U
 #define BMS_CURRENT_CHARGE_IS_POSITIVE              1
+#define BMS_FLASH_SAVE_INTERVAL_MS                  600000UL
+#define BMS_FLASH_SAVE_DELTA_MAH                    100UL
 
 #define NUMBER_OF_CELLS                             BMS_NUMBER_OF_CELLS
 #define NUMBER_OF_THERMISTORS                       BMS_NUMBER_OF_THERMISTORS
