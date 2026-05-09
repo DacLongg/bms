@@ -59,6 +59,29 @@ void Error_Handler(void);
 /* Private defines -----------------------------------------------------------*/
 
 /* USER CODE BEGIN Private defines */
+/* BQ76952 hardware control/status pins */
+#define FETOFF_Pin GPIO_PIN_1
+#define FETOFF_GPIO_Port GPIOA
+#define ALERT_Pin GPIO_PIN_2
+#define ALERT_GPIO_Port GPIOA
+#define DCHG_Pin GPIO_PIN_0
+#define DCHG_GPIO_Port GPIOB
+#define DDSG_Pin GPIO_PIN_1
+#define DDSG_GPIO_Port GPIOB
+#define SHUT_Pin GPIO_PIN_10
+#define SHUT_GPIO_Port GPIOB
+
+/* Board-level utility pins */
+#define BATS_EN_Pin GPIO_PIN_4
+#define BATS_EN_GPIO_Port GPIOB
+#define BAT_ADC_Pin GPIO_PIN_4
+#define BAT_ADC_GPIO_Port GPIOA
+#define LED1_Pin GPIO_PIN_5
+#define LED1_GPIO_Port GPIOA
+#define POW_EN_Pin GPIO_PIN_6
+#define POW_EN_GPIO_Port GPIOA
+#define LED3_Pin GPIO_PIN_7
+#define LED3_GPIO_Port GPIOA
 
 /* USER CODE END Private defines */
 

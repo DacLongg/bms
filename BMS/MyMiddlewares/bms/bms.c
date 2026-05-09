@@ -1,10 +1,21 @@
 #include "bms.h"
+#include "main.h"
+#include "adc.h"
 
 #include <limits.h>
 #include <stddef.h>
 
 #include "debug_log.h"
 #include "storage_flash.h"
+
+#define BMS_ALERT_POLL_FALLBACK_MS 1000U
+#define BMS_SHUT_HOLD_MS 1100U
+#define BMS_BAT_ADC_SAMPLE_MS 1000U
+#define BMS_BAT_ADC_SETTLE_MS 1U
+#define BMS_BAT_ADC_REF_MV 3300UL
+#define BMS_BAT_ADC_COUNTS 4095UL
+#define BMS_BAT_ADC_DIVIDER_NUM 13300UL
+#define BMS_BAT_ADC_DIVIDER_DEN 3300UL
 
 static BMS_Tracking_t g_bms_tracking;
 static uint32_t g_last_update_tick;
@@ -14,10 +25,24 @@ static uint32_t g_last_saved_charge_mAh;
 static uint32_t g_last_saved_discharge_mAh;
 static BMS_State_t g_last_logged_state = BMS_STATE_INIT;
 static uint16_t g_last_logged_balance_mask;
+static volatile bool g_alert_irq_pending;
+static volatile uint32_t g_alert_irq_counter;
+static volatile bool g_dchg_signal_active;
+static volatile bool g_ddsg_signal_active;
+static uint32_t g_last_alert_service_tick;
+static uint32_t g_last_bat_adc_sample_tick;
+static bool g_shutdown_pulse_active;
+static uint32_t g_shutdown_pulse_tick;
 
 static void BMS_ResetTracking(void);
 static void BMS_ConfigureMonitor(void);
+static void BMS_ConfigureHardwarePins(void);
 static void BMS_ReadMeasurements(BMS_Tracking_t *tracking);
+static void BMS_HandleHardwareSignals(BMS_Tracking_t *tracking, uint32_t now);
+static void BMS_UpdateBatteryAdc(BMS_Tracking_t *tracking, uint32_t now);
+static void BMS_UpdateShutdownPulse(uint32_t now);
+static void BMS_SetFetoff(bool asserted);
+static void BMS_SetBatSenseEnable(bool enabled);
 static void BMS_UpdateCellStatistics(BMS_Tracking_t *tracking);
 static void BMS_UpdateCurrentDirection(BMS_Tracking_t *tracking);
 static void BMS_UpdateFaultFlags(BMS_Tracking_t *tracking);
@@ -38,6 +63,7 @@ static int32_t BMS_AbsCurrent(int32_t current_mA);
 void BMS_Init(void)
 {
     BMS_ResetTracking();
+    BMS_ConfigureHardwarePins();
     BMS_LOG_INFO("bms init");
     bq76952_init();
 
@@ -55,6 +81,8 @@ void BMS_Init(void)
     g_last_update_tick = HAL_GetTick();
     g_last_balance_tick = g_last_update_tick;
     g_last_flash_save_tick = g_last_update_tick;
+    g_last_alert_service_tick = g_last_update_tick;
+    g_last_bat_adc_sample_tick = g_last_update_tick;
 
     BMS_Update();
 }
@@ -68,6 +96,7 @@ void BMS_Update(void)
         dt_ms = 1U;
     }
     g_last_update_tick = now;
+    BMS_UpdateShutdownPulse(now);
 
     g_bms_tracking.connected = bq76952_isConnected();
     if (!g_bms_tracking.connected) {
@@ -78,14 +107,16 @@ void BMS_Update(void)
     }
 
     BMS_ReadMeasurements(&g_bms_tracking);
-    BMS_UpdateCellStatistics(&g_bms_tracking);
-    BMS_UpdateCurrentDirection(&g_bms_tracking);
-    BMS_UpdateFaultFlags(&g_bms_tracking);
-    BMS_MergeBQFaultFlags(&g_bms_tracking);
-    BMS_UpdateCoulombCounter(&g_bms_tracking, dt_ms);
-    BMS_UpdateState(&g_bms_tracking);
-    BMS_ApplyFetPolicy(&g_bms_tracking);
-    BMS_UpdateBalancing(&g_bms_tracking, now);
+    BMS_HandleHardwareSignals(&g_bms_tracking, now);
+    BMS_UpdateBatteryAdc(&g_bms_tracking, now);
+    BMS_UpdateCellStatistics(&g_bms_tracking); // Cập nhật min/max/average/delta cell voltage và stack voltage
+    BMS_UpdateCurrentDirection(&g_bms_tracking); // Cập nhật chiều dòng điện dựa trên giá trị current_mA
+    BMS_UpdateFaultFlags(&g_bms_tracking); // Cập nhật các cờ lỗi dựa trên ngưỡng điện áp, nhiệt độ, dòng điện
+    BMS_MergeBQFaultFlags(&g_bms_tracking); // Kết hợp các cờ lỗi từ BQ76952 vào tracking
+    BMS_UpdateCoulombCounter(&g_bms_tracking, dt_ms); // Cập nhật tích trữ mAs và throughput mAh dựa trên current và dt
+    BMS_UpdateState(&g_bms_tracking); // Cập nhật trạng thái BMS dựa trên các cờ lỗi và điều kiện hoạt động
+    BMS_ApplyFetPolicy(&g_bms_tracking); // Điều khiển FET sạc/xả dựa trên trạng thái và cờ lỗi
+    BMS_UpdateBalancing(&g_bms_tracking, now); // Cập nhật trạng thái cân bằng cell và mask dựa trên delta cell voltage và ngưỡng
     BMS_SavePersistedDataIfNeeded(&g_bms_tracking, now);
 
     g_bms_tracking.circle_counter++;
@@ -106,6 +137,8 @@ bool BMS_IsFaultActive(void)
            g_bms_tracking.faults.underTemperature ||
            g_bms_tracking.faults.chargeOverCurrent ||
            g_bms_tracking.faults.dischargeOverCurrent ||
+           g_bms_tracking.chargeGateFaultSignal ||
+           g_bms_tracking.dischargeGateFaultSignal ||
            g_bms_tracking.faults.shortCircuit ||
            g_bms_tracking.faults.bqSafetyFault ||
            g_bms_tracking.faults.communicationFault;
@@ -125,12 +158,34 @@ void BMS_Error_Handler(void)
     g_bms_tracking.state = BMS_STATE_FAULT;
     g_bms_tracking.balanceMask = 0U;
     g_bms_tracking.balanceRequired = false;
+    g_bms_tracking.fetOffAsserted = true;
+    g_bms_tracking.batSenseEnabled = false;
     bq76952_setCellBalanceMask(0U);
     bq76952_setFET(ALL, OFF);
+    BMS_SetFetoff(true);
+    BMS_SetBatSenseEnable(false);
+}
+
+void BMS_NotifyAlertInterrupt(void)
+{
+    g_alert_irq_pending = true;
+    g_alert_irq_counter++;
+}
+
+void BMS_RequestShutdown(void)
+{
+    if (g_shutdown_pulse_active) {
+        return;
+    }
+    HAL_GPIO_WritePin(SHUT_GPIO_Port, SHUT_Pin, GPIO_PIN_SET);
+    g_shutdown_pulse_tick = HAL_GetTick();
+    g_shutdown_pulse_active = true;
+    BMS_LOG_WARN("shutdown pulse start");
 }
 
 static void BMS_ResetTracking(void)
 {
+    /* Reset all cell voltages */
     for (uint8_t i = 0U; i < BMS_NUMBER_OF_CELLS; ++i) {
         g_bms_tracking.cellVoltages[i] = 0U;
     }
@@ -158,6 +213,15 @@ static void BMS_ResetTracking(void)
     g_bms_tracking.faults = (BMS_FaultFlags_t){0};
     g_bms_tracking.chargeDisabled = true;
     g_bms_tracking.dischargeDisabled = true;
+    g_bms_tracking.chargeGateFaultSignal = false;
+    g_bms_tracking.dischargeGateFaultSignal = false;
+    g_bms_tracking.fetOffAsserted = false;
+    g_bms_tracking.alertActive = false;
+    g_bms_tracking.alertCounter = 0UL;
+    g_bms_tracking.batSenseEnabled = false;
+    g_bms_tracking.batAdcRaw = 0U;
+    g_bms_tracking.batAdcPin_mV = 0U;
+    g_bms_tracking.batAdcEstimatedPack_mV = 0U;
     g_bms_tracking.balanceRequired = false;
     g_bms_tracking.balanceMask = 0U;
     g_bms_tracking.chargeAccumulated_mAs = 0ULL;
@@ -188,6 +252,14 @@ static void BMS_ConfigureMonitor(void)
     bq76952_setCellInterconnectResistances();
     bq76952_setEnableTS1();
     bq76952_setEnableTS2();
+    bq76952_setAlertPinConfig();
+    bq76952_setDFETOFFPinConfig(true, false);
+    bq76952_setDCHGPinConfig(false);
+    bq76952_setDDSGPinConfig(false);
+    bq76952_setDefaultAlarmMaskConfig();
+    bq76952_setSF_AlertMask_A();
+    bq76952_setSF_AlertMask_B();
+    bq76952_setSF_AlertMask_C();
     bq76952_setCellOvervoltageProtection(BMS_CELL_OV_CUTOFF_MV, BMS_BQ_PROTECTION_DELAY_MS);
     bq76952_setCellUndervoltageProtection(BMS_CELL_UV_CUTOFF_MV, BMS_BQ_PROTECTION_DELAY_MS);
     bq76952_setChargingTemperatureMaxLimit(BMS_CHARGE_OT_CUTOFF_C, 2U);
@@ -208,6 +280,105 @@ static void BMS_ConfigureMonitor(void)
     bq76952_setCellBalanceMask(0U);
     bq76952_setFET(ALL, ON);
     BMS_LOG_INFO("bq configured oc=%lu mV", (unsigned long)over_current_sense_mV);
+}
+
+static void BMS_ConfigureHardwarePins(void)
+{
+    HAL_GPIO_WritePin(FETOFF_GPIO_Port, FETOFF_Pin, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(SHUT_GPIO_Port, SHUT_Pin, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(BATS_EN_GPIO_Port, BATS_EN_Pin, GPIO_PIN_RESET);
+    g_alert_irq_pending = false;
+    g_alert_irq_counter = 0UL;
+    g_dchg_signal_active = (HAL_GPIO_ReadPin(DCHG_GPIO_Port, DCHG_Pin) == GPIO_PIN_SET);
+    g_ddsg_signal_active = (HAL_GPIO_ReadPin(DDSG_GPIO_Port, DDSG_Pin) == GPIO_PIN_SET);
+    g_shutdown_pulse_active = false;
+    g_shutdown_pulse_tick = 0UL;
+}
+
+static void BMS_UpdateShutdownPulse(uint32_t now)
+{
+    if (!g_shutdown_pulse_active) {
+        return;
+    }
+    if ((now - g_shutdown_pulse_tick) < BMS_SHUT_HOLD_MS) {
+        return;
+    }
+    HAL_GPIO_WritePin(SHUT_GPIO_Port, SHUT_Pin, GPIO_PIN_RESET);
+    g_shutdown_pulse_active = false;
+    BMS_LOG_WARN("shutdown pulse done");
+}
+
+static void BMS_SetFetoff(bool asserted)
+{
+    HAL_GPIO_WritePin(FETOFF_GPIO_Port, FETOFF_Pin, asserted ? GPIO_PIN_SET : GPIO_PIN_RESET);
+    g_bms_tracking.fetOffAsserted = asserted;
+}
+
+static void BMS_SetBatSenseEnable(bool enabled)
+{
+    HAL_GPIO_WritePin(BATS_EN_GPIO_Port, BATS_EN_Pin, enabled ? GPIO_PIN_SET : GPIO_PIN_RESET);
+    g_bms_tracking.batSenseEnabled = enabled;
+}
+
+static void BMS_HandleHardwareSignals(BMS_Tracking_t *tracking, uint32_t now)
+{
+    bool should_service_alert;
+
+    if (tracking == NULL) {
+        return;
+    }
+
+    tracking->chargeGateFaultSignal = g_dchg_signal_active;
+    tracking->dischargeGateFaultSignal = g_ddsg_signal_active;
+
+    should_service_alert = g_alert_irq_pending ||
+                           ((now - g_last_alert_service_tick) >= BMS_ALERT_POLL_FALLBACK_MS);
+    if (!should_service_alert) {
+        return;
+    }
+
+    g_alert_irq_pending = false;
+    g_last_alert_service_tick = now;
+    tracking->alertCounter = g_alert_irq_counter;
+    tracking->alertActive = (bq76952_getAlertStatusRegister() != 0U);
+    (void)bq76952_getAlertRawStatusRegister();
+}
+
+static void BMS_UpdateBatteryAdc(BMS_Tracking_t *tracking, uint32_t now)
+{
+    uint32_t pin_mv;
+    uint32_t pack_mv;
+
+    if (tracking == NULL) {
+        return;
+    }
+    if ((now - g_last_bat_adc_sample_tick) < BMS_BAT_ADC_SAMPLE_MS) {
+        return;
+    }
+    g_last_bat_adc_sample_tick = now;
+
+    BMS_SetBatSenseEnable(true);
+    HAL_Delay(BMS_BAT_ADC_SETTLE_MS);
+
+    if (HAL_ADC_Start(&hadc) != HAL_OK) {
+        BMS_SetBatSenseEnable(false);
+        return;
+    }
+    if (HAL_ADC_PollForConversion(&hadc, 5U) != HAL_OK) {
+        (void)HAL_ADC_Stop(&hadc);
+        BMS_SetBatSenseEnable(false);
+        return;
+    }
+
+    tracking->batAdcRaw = (uint16_t)HAL_ADC_GetValue(&hadc);
+    (void)HAL_ADC_Stop(&hadc);
+    BMS_SetBatSenseEnable(false);
+
+    pin_mv = ((uint32_t)tracking->batAdcRaw * BMS_BAT_ADC_REF_MV) / BMS_BAT_ADC_COUNTS;
+    pack_mv = (pin_mv * BMS_BAT_ADC_DIVIDER_NUM) / BMS_BAT_ADC_DIVIDER_DEN;
+
+    tracking->batAdcPin_mV = (uint16_t)pin_mv;
+    tracking->batAdcEstimatedPack_mV = (uint16_t)pack_mv;
 }
 
 static void BMS_ReadMeasurements(BMS_Tracking_t *tracking)
@@ -397,6 +568,7 @@ static void BMS_UpdateState(BMS_Tracking_t *tracking)
                                tracking->faults.chargeOverTemperature ||
                                tracking->faults.underTemperature ||
                                tracking->faults.chargeOverCurrent ||
+                               tracking->chargeGateFaultSignal ||
                                tracking->faults.shortCircuit ||
                                tracking->faults.bqSafetyFault ||
                                tracking->faults.communicationFault;
@@ -405,6 +577,7 @@ static void BMS_UpdateState(BMS_Tracking_t *tracking)
                                   tracking->faults.dischargeOverTemperature ||
                                   tracking->faults.underTemperature ||
                                   tracking->faults.dischargeOverCurrent ||
+                                  tracking->dischargeGateFaultSignal ||
                                   tracking->faults.shortCircuit ||
                                   tracking->faults.bqSafetyFault ||
                                   tracking->faults.communicationFault;
@@ -435,6 +608,8 @@ static void BMS_UpdateState(BMS_Tracking_t *tracking)
                          (tracking->faults.underTemperature ? 0x010U : 0U) |
                          (tracking->faults.chargeOverCurrent ? 0x020U : 0U) |
                          (tracking->faults.dischargeOverCurrent ? 0x040U : 0U) |
+                         (tracking->chargeGateFaultSignal ? 0x400U : 0U) |
+                         (tracking->dischargeGateFaultSignal ? 0x800U : 0U) |
                          (tracking->faults.shortCircuit ? 0x080U : 0U) |
                          (tracking->faults.bqSafetyFault ? 0x100U : 0U) |
                          (tracking->faults.communicationFault ? 0x200U : 0U)));
@@ -449,6 +624,7 @@ static void BMS_ApplyFetPolicy(BMS_Tracking_t *tracking)
     }
 
     if (tracking->chargeDisabled && tracking->dischargeDisabled) {
+        BMS_SetFetoff(true);
         bq76952_setFET(ALL, OFF);
         tracking->chargeFetEnabled = false;
         tracking->dischargeFetEnabled = false;
@@ -456,20 +632,34 @@ static void BMS_ApplyFetPolicy(BMS_Tracking_t *tracking)
     }
 
     if (tracking->chargeDisabled) {
+        BMS_SetFetoff(false);
         bq76952_setFET(CHG, OFF);
         tracking->chargeFetEnabled = false;
         return;
     }
 
     if (tracking->dischargeDisabled) {
+        BMS_SetFetoff(false);
         bq76952_setFET(DCH, OFF);
         tracking->dischargeFetEnabled = false;
         return;
     }
 
+    BMS_SetFetoff(false);
     bq76952_setFET(ALL, ON);
     tracking->chargeFetEnabled = true;
     tracking->dischargeFetEnabled = true;
+}
+
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+    if (GPIO_Pin == ALERT_Pin) {
+        BMS_NotifyAlertInterrupt();
+    } else if (GPIO_Pin == DCHG_Pin) {
+        g_dchg_signal_active = (HAL_GPIO_ReadPin(DCHG_GPIO_Port, DCHG_Pin) == GPIO_PIN_SET);
+    } else if (GPIO_Pin == DDSG_Pin) {
+        g_ddsg_signal_active = (HAL_GPIO_ReadPin(DDSG_GPIO_Port, DDSG_Pin) == GPIO_PIN_SET);
+    }
 }
 
 static void BMS_UpdateCoulombCounter(BMS_Tracking_t *tracking, uint32_t dt_ms)
@@ -568,16 +758,16 @@ static void BMS_LoadPersistedData(BMS_Tracking_t *tracking)
     if (tracking == NULL) {
         return;
     }
-
+    /* Load persisted data from flash */
     if (!storage_flash_load(&record)) {
         BMS_LOG_WARN("flash record invalid, use defaults");
         storage_flash_make_default(&record);
     }
 
-    tracking->chargeThroughput_mAh = record.chargeThroughput_mAh;
+    tracking->chargeThroughput_mAh = record.chargeThroughput_mAh;   // Note: discharge throughput and equivalent cycle may be inconsistent with charge throughput, but it's acceptable for estimation purpose
     tracking->dischargeThroughput_mAh = record.dischargeThroughput_mAh;
-    tracking->equivalentCycle_milliCycles = record.equivalentCycle_milliCycles;
-    tracking->chargeAccumulated_mAs = (uint64_t)record.chargeThroughput_mAh * 3600ULL;
+    tracking->equivalentCycle_milliCycles = record.equivalentCycle_milliCycles; // chu kì sạc xả
+    tracking->chargeAccumulated_mAs = (uint64_t)record.chargeThroughput_mAh * 3600ULL; // tích trữ mAs dựa trên charge throughput đã lưu, vì discharge throughput có thể không chính xác nếu có lỗi ghi flash trước đó
     tracking->dischargeAccumulated_mAs = (uint64_t)record.dischargeThroughput_mAh * 3600ULL;
     g_last_saved_charge_mAh = tracking->chargeThroughput_mAh;
     g_last_saved_discharge_mAh = tracking->dischargeThroughput_mAh;
@@ -655,6 +845,7 @@ static const char *BMS_StateName(BMS_State_t state)
     }
 }
 
+/* Helper functions to check if all cells  are above/below certain thresholds for fault recovery conditions */
 static bool BMS_AllCellsAtOrBelow(const BMS_Tracking_t *tracking, uint16_t threshold_mV)
 {
     for (uint8_t i = 0U; i < BMS_NUMBER_OF_CELLS; ++i) {

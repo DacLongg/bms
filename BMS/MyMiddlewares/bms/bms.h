@@ -93,6 +93,15 @@ typedef struct {
     BMS_FaultFlags_t faults;
     bool     chargeDisabled;
     bool     dischargeDisabled;
+    bool     chargeGateFaultSignal;
+    bool     dischargeGateFaultSignal;
+    bool     fetOffAsserted;
+    bool     alertActive;
+    uint32_t alertCounter;
+    bool     batSenseEnabled;
+    uint16_t batAdcRaw;
+    uint16_t batAdcPin_mV;
+    uint16_t batAdcEstimatedPack_mV;
     bool     balanceRequired;
     uint16_t balanceMask;
 
@@ -108,5 +117,7 @@ void BMS_Update(void);
 const BMS_Tracking_t *BMS_GetTracking(void);
 bool BMS_IsFaultActive(void);
 void BMS_Error_Handler(void);
+void BMS_NotifyAlertInterrupt(void);
+void BMS_RequestShutdown(void);
 
 #endif

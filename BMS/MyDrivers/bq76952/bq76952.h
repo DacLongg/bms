@@ -69,7 +69,11 @@ typedef enum {
  */
 #define REG0_CONFIG 0x9237U
 #define REG12_CONTROL 0x9236U
+#define CFETOFF_PIN_CONFIG 0x92FBU
 #define ALERT_PIN_CONFIG 0x92FCU
+#define DFETOFF_PIN_CONFIG 0x9300U
+#define DCHG_PIN_CONFIG 0x9301U
+#define DDSG_PIN_CONFIG 0x9302U
 #define DEFAULT_ALARM_MASK_CONFIG 0x926DU
 #define DA_CONFIGURATION 0x9303U
 #define SHUTDOWN_STACK_VOLTAGE 0x9241U
@@ -313,6 +317,12 @@ void bq76952_setSF_AlertMask_C(void);
 void bq76952_setEnableRegulator(bool enable_reg1, bool enable_reg2);
 /* Cấu hình chân ALERT theo bit pattern được hard-code. */
 void bq76952_setAlertPinConfig(void);
+/* Cấu hình DFETOFF/BOTHOFF pin để MCU có thể cắt nhanh đường FET qua chân cứng. */
+void bq76952_setDFETOFFPinConfig(bool both_off_mode, bool active_low);
+/* Cấu hình DCHG pin thành output trạng thái fault liên quan nhánh charge. */
+void bq76952_setDCHGPinConfig(bool active_low);
+/* Cấu hình DDSG pin thành output trạng thái fault liên quan nhánh discharge. */
+void bq76952_setDDSGPinConfig(bool active_low);
 /* Cấu hình mask mặc định của alarm status. */
 void bq76952_setDefaultAlarmMaskConfig(void);
 /* Chọn cell nào được tham gia phép đo điện áp bằng bitmask VCELL_MODE. */

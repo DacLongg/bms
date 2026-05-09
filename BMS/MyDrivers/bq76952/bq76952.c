@@ -74,6 +74,7 @@ static void bq76952_subCommand(unsigned int data);
 static void bq76952_subCommandWithU16Data(unsigned int command, uint16_t data);
 static int16_t bq76952_subCommandResponseInt(byte offset);
 static byte bq76952_calculateChecksum(byte oldChecksum, byte data);
+static byte bq76952_make_pin_config(byte pin_fxn, bool active_low);
 static void bq76952_writeDataMemory(unsigned int addr, int16_t data, byte noOfBytes);
 static void bq76952_writeDataMemoryWithoutConfigUpdate(unsigned int addr, int16_t data, byte noOfBytes);
 
@@ -184,6 +185,20 @@ static byte bq76952_calculateChecksum(byte oldChecksum, byte data)
     }
 
     return (byte)(~oldChecksum);
+}
+
+static byte bq76952_make_pin_config(byte pin_fxn, bool active_low)
+{
+    byte cfg = (byte)(pin_fxn & 0x03U);
+
+    /* OPT3=1 + OPT1=1: dùng REG1 làm mức logic cao và bật active drive.
+     * OPT5 quyết định cực tính active-high/active-low của tín hiệu chức năng ALT.
+     */
+    cfg |= 0x28U;
+    if (active_low) {
+        cfg |= 0x80U;
+    }
+    return cfg;
 }
 
 /* Ghi một mục data memory.
@@ -836,6 +851,26 @@ void bq76952_setAlertPinConfig(void)
 {
     /* 0x2A quy định mode chân ALERT theo cấu hình phần cứng mong muốn của dự án. */
     bq76952_writeDataMemory(ALERT_PIN_CONFIG, 0x2A, 1U);
+}
+
+void bq76952_setDFETOFFPinConfig(bool both_off_mode, bool active_low)
+{
+    byte cfg = bq76952_make_pin_config(0x02U, active_low);
+
+    if (both_off_mode) {
+        cfg |= 0x10U;
+    }
+    bq76952_writeDataMemory(DFETOFF_PIN_CONFIG, cfg, 1U);
+}
+
+void bq76952_setDCHGPinConfig(bool active_low)
+{
+    bq76952_writeDataMemory(DCHG_PIN_CONFIG, bq76952_make_pin_config(0x02U, active_low), 1U);
+}
+
+void bq76952_setDDSGPinConfig(bool active_low)
+{
+    bq76952_writeDataMemory(DDSG_PIN_CONFIG, bq76952_make_pin_config(0x02U, active_low), 1U);
 }
 
 void bq76952_setDefaultAlarmMaskConfig(void)
