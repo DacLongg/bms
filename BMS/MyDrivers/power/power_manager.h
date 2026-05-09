@@ -35,6 +35,8 @@ typedef struct {
 HAL_StatusTypeDef power_manager_enter_low_power_sleep(uint32_t auto_wakeup_ms);
 void power_manager_exit_low_power_sleep_to_run(void);
 bool power_manager_is_sleeping(void);
+void power_manager_notify_gpio_wakeup(void);
+power_manager_wakeup_source_t power_manager_get_and_clear_wakeup_source(void);
 
 
 

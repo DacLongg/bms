@@ -1,6 +1,7 @@
 #include "bms.h"
 #include "main.h"
 #include "adc.h"
+#include "MyDrivers/power/power_manager.h"
 
 #include <limits.h>
 #include <stddef.h>
@@ -218,6 +219,8 @@ static void BMS_ResetTracking(void)
     g_bms_tracking.fetOffAsserted = false;
     g_bms_tracking.alertActive = false;
     g_bms_tracking.alertCounter = 0UL;
+    g_bms_tracking.bqSleepMode = false;
+    g_bms_tracking.bqSleepAllowed = false;
     g_bms_tracking.batSenseEnabled = false;
     g_bms_tracking.batAdcRaw = 0U;
     g_bms_tracking.batAdcPin_mV = 0U;
@@ -384,6 +387,7 @@ static void BMS_UpdateBatteryAdc(BMS_Tracking_t *tracking, uint32_t now)
 static void BMS_ReadMeasurements(BMS_Tracking_t *tracking)
 {
     int raw_cell_voltage[BMS_NUMBER_OF_CELLS];
+    bq76952_battery_status_t batt_status;
 
     if (tracking == NULL) {
         return;
@@ -407,6 +411,9 @@ static void BMS_ReadMeasurements(BMS_Tracking_t *tracking)
     tracking->chargeFetEnabled = tracking->charging;
     tracking->dischargeFetEnabled = tracking->discharging;
     tracking->fetsEnabled = bq76952_areFETs_Enabled();
+    batt_status = bq76952_getBatteryStatusRegister();
+    tracking->bqSleepMode = batt_status.bits.SLEEP_MODE != 0U;
+    tracking->bqSleepAllowed = batt_status.bits.SLEEP_EN_ALLOWED != 0U;
 }
 
 static void BMS_UpdateCellStatistics(BMS_Tracking_t *tracking)
@@ -655,10 +662,13 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
     if (GPIO_Pin == ALERT_Pin) {
         BMS_NotifyAlertInterrupt();
+        power_manager_notify_gpio_wakeup();
     } else if (GPIO_Pin == DCHG_Pin) {
         g_dchg_signal_active = (HAL_GPIO_ReadPin(DCHG_GPIO_Port, DCHG_Pin) == GPIO_PIN_SET);
+        power_manager_notify_gpio_wakeup();
     } else if (GPIO_Pin == DDSG_Pin) {
         g_ddsg_signal_active = (HAL_GPIO_ReadPin(DDSG_GPIO_Port, DDSG_Pin) == GPIO_PIN_SET);
+        power_manager_notify_gpio_wakeup();
     }
 }
 

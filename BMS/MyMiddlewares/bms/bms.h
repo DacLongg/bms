@@ -98,6 +98,8 @@ typedef struct {
     bool     fetOffAsserted;
     bool     alertActive;
     uint32_t alertCounter;
+    bool     bqSleepMode;
+    bool     bqSleepAllowed;
     bool     batSenseEnabled;
     uint16_t batAdcRaw;
     uint16_t batAdcPin_mV;
