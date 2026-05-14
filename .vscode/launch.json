@@ -1,0 +1,20 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug BMS (ST-Link)",
+      "cwd": "${workspaceFolder}/BMS",
+      "executable": "${workspaceFolder}/BMS/build/BMS.elf",
+      "request": "launch",
+      "type": "cortex-debug",
+      "servertype": "openocd",
+      "configFiles": [
+        "interface/stlink.cfg",
+        "target/stm32l0.cfg"
+      ],
+      "device": "STM32L010C6Tx",
+      "runToEntryPoint": "main",
+      "preLaunchTask": "Rebuild BMS"
+    }
+  ]
+}

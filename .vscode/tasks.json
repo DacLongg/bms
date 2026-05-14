@@ -1,0 +1,53 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build BMS",
+      "type": "shell",
+      "command": "make",
+      "args": [
+        "-C",
+        "BMS",
+        "all"
+      ],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": [
+        "$gcc"
+      ]
+    },
+    {
+      "label": "Rebuild BMS",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "Clean BMS",
+        "Build BMS"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "Clean BMS",
+      "type": "shell",
+      "command": "make",
+      "args": [
+        "-C",
+        "BMS",
+        "clean"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "Flash BMS (ST-Link)",
+      "type": "shell",
+      "command": "make",
+      "args": [
+        "-C",
+        "BMS",
+        "flash-stlink"
+      ],
+      "problemMatcher": []
+    }
+  ]
+}
