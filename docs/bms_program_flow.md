@@ -271,21 +271,24 @@ Neu co fault, khong can balancing, hoac dang xa, BMS gui mask `0` de tat balanci
 - Danh dau `chargeDisabled` va `dischargeDisabled`.
 - Cap nhat tracking ve trang thai khong an toan.
 
-## 14. Debug Log Over USART2
+## 14. USART2 Debug Log / External Protocol
 
-Log debug dung `USART2` da duoc CubeMX cau hinh san:
+`USART2` da duoc CubeMX cau hinh san:
 
 - Baudrate: `115200`.
 - TX/RX: theo cau hinh `MX_USART2_UART_Init()`.
-- API: `debug_log_init()`, `BMS_LOG_INFO()`, `BMS_LOG_WARN()`, `BMS_LOG_ERROR()`.
+- Mac dinh dung debug log: `debug_log_init()`, `BMS_LOG_INFO()`, `BMS_LOG_WARN()`, `BMS_LOG_ERROR()`.
+- Neu build voi `BMS_UART_PROTOCOL_ENABLE=1`, `USART2` duoc dung cho protocol doc thong so BMS va log tu dong tat.
 
-Tat log bang cach define:
+Build protocol:
 
-```c
-#define BMS_DEBUG_LOG_ENABLE 0
+```sh
+make -C BMS all USER_DEFS=-DBMS_UART_PROTOCOL_ENABLE=1
 ```
 
-Co the dat macro nay trong compiler flags hoac truoc khi include `debug_log.h`.
+Neu ep `BMS_DEBUG_LOG_ENABLE=1` va `BMS_UART_PROTOCOL_ENABLE=1` cung luc thi build se dung bang `#error`, vi log va protocol dung chung channel UART.
+
+Chi tiet frame, CRC va command doc thong so nam trong `docs/bms_uart_protocol.md`.
 
 Log hien tai duoc ghi tai cac su kien:
 

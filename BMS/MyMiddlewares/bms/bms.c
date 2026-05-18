@@ -54,7 +54,9 @@ static void BMS_UpdateCoulombCounter(BMS_Tracking_t *tracking, uint32_t dt_ms);
 static void BMS_UpdateBalancing(BMS_Tracking_t *tracking, uint32_t now);
 static void BMS_LoadPersistedData(BMS_Tracking_t *tracking);
 static void BMS_SavePersistedDataIfNeeded(const BMS_Tracking_t *tracking, uint32_t now);
+#if BMS_DEBUG_LOG_ENABLE
 static const char *BMS_StateName(BMS_State_t state);
+#endif
 static bool BMS_AllCellsAtOrBelow(const BMS_Tracking_t *tracking, uint16_t threshold_mV);
 static bool BMS_AllCellsAtOrAbove(const BMS_Tracking_t *tracking, uint16_t threshold_mV);
 static bool BMS_AllTemperaturesAtOrBelow(const BMS_Tracking_t *tracking, int16_t threshold_C);
@@ -837,6 +839,7 @@ static void BMS_SavePersistedDataIfNeeded(const BMS_Tracking_t *tracking, uint32
     }
 }
 
+#if BMS_DEBUG_LOG_ENABLE
 static const char *BMS_StateName(BMS_State_t state)
 {
     switch (state) {
@@ -854,6 +857,7 @@ static const char *BMS_StateName(BMS_State_t state)
         return "UNKNOWN";
     }
 }
+#endif
 
 /* Helper functions to check if all cells  are above/below certain thresholds for fault recovery conditions */
 static bool BMS_AllCellsAtOrBelow(const BMS_Tracking_t *tracking, uint16_t threshold_mV)

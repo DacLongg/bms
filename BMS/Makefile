@@ -30,6 +30,7 @@ OPT = -Og
 #######################################
 # Build path
 BUILD_DIR = build
+BUILD_CONFIG_FILE = $(BUILD_DIR)/.build_config
 
 ######################################
 # source
@@ -49,6 +50,7 @@ MyMiddlewares/bms/bms.c \
 MyDrivers/power/power_manager.c \
 MyDrivers/bq76952/bq76952.c \
 MyDrivers/i2c_soft/i2c_soft.c \
+MyDrivers/bms_uart/bms_uart.c \
 MyDrivers/debug_log/debug_log.c \
 MyDrivers/storage_flash/storage_flash.c \
 Drivers/STM32L0xx_HAL_Driver/Src/stm32l0xx_hal_adc.c \
@@ -146,6 +148,8 @@ C_INCLUDES =  \
 -IMyMiddlewares/bms \
 -IMyDrivers/bq76952 \
 -IMyDrivers/i2c_soft \
+-IMyDrivers/bms_uart \
+-IMyDrivers/power \
 -IMyDrivers/debug_log \
 -IMyDrivers/storage_flash \
 -IDrivers/STM32L0xx_HAL_Driver/Inc \
@@ -158,6 +162,8 @@ C_INCLUDES =  \
 ASFLAGS = $(MCU) $(AS_DEFS) $(AS_INCLUDES) $(OPT) -Wall -fdata-sections -ffunction-sections
 
 CFLAGS += $(MCU) $(C_DEFS) $(C_INCLUDES) $(OPT) -Wall -fdata-sections -ffunction-sections
+USER_DEFS ?=
+CFLAGS += $(USER_DEFS)
 
 ifeq ($(DEBUG), 1)
 CFLAGS += -g -gdwarf-2
@@ -195,12 +201,21 @@ vpath %.s $(sort $(dir $(ASM_SOURCES)))
 OBJECTS += $(addprefix $(BUILD_DIR)/,$(notdir $(ASMM_SOURCES:.S=.o)))
 vpath %.S $(sort $(dir $(ASMM_SOURCES)))
 
-$(BUILD_DIR)/%.o: %.c Makefile | $(BUILD_DIR) 
+BUILD_CONFIG_VARS = $(MCU) $(C_DEFS) $(C_INCLUDES) $(AS_DEFS) $(AS_INCLUDES) $(OPT) DEBUG=$(DEBUG) USER_DEFS=$(USER_DEFS)
+
+.PHONY: FORCE
+
+$(BUILD_CONFIG_FILE): FORCE | $(BUILD_DIR)
+	@printf '%s\n' '$(BUILD_CONFIG_VARS)' > $(BUILD_DIR)/.build_config.tmp
+	@cmp -s $(BUILD_DIR)/.build_config.tmp $@ || mv $(BUILD_DIR)/.build_config.tmp $@
+	@rm -f $(BUILD_DIR)/.build_config.tmp
+
+$(BUILD_DIR)/%.o: %.c Makefile $(BUILD_CONFIG_FILE) | $(BUILD_DIR) 
 	$(CC) -c $(CFLAGS) -Wa,-a,-ad,-alms=$(BUILD_DIR)/$(notdir $(<:.c=.lst)) $< -o $@
 
-$(BUILD_DIR)/%.o: %.s Makefile | $(BUILD_DIR)
+$(BUILD_DIR)/%.o: %.s Makefile $(BUILD_CONFIG_FILE) | $(BUILD_DIR)
 	$(AS) -c $(CFLAGS) $< -o $@
-$(BUILD_DIR)/%.o: %.S Makefile | $(BUILD_DIR)
+$(BUILD_DIR)/%.o: %.S Makefile $(BUILD_CONFIG_FILE) | $(BUILD_DIR)
 	$(AS) -c $(CFLAGS) $< -o $@
 
 $(BUILD_DIR)/$(TARGET).elf: $(OBJECTS) Makefile

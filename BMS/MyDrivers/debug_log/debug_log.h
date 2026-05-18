@@ -4,10 +4,7 @@
 #include <stdint.h>
 
 #include "stm32l0xx_hal.h"
-
-#ifndef BMS_DEBUG_LOG_ENABLE
-#define BMS_DEBUG_LOG_ENABLE 1
-#endif
+#include "bms_uart_channel.h"
 
 #ifndef BMS_DEBUG_LOG_BUFFER_SIZE
 #define BMS_DEBUG_LOG_BUFFER_SIZE 128U

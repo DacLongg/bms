@@ -19,6 +19,20 @@
       ]
     },
     {
+      "label": "Build BMS UART Protocol",
+      "type": "shell",
+      "command": "make",
+      "args": [
+        "-C",
+        "BMS",
+        "all",
+        "USER_DEFS=-DBMS_UART_PROTOCOL_ENABLE=1"
+      ],
+      "problemMatcher": [
+        "$gcc"
+      ]
+    },
+    {
       "label": "Rebuild BMS",
       "dependsOrder": "sequence",
       "dependsOn": [

@@ -1,5 +1,6 @@
 
 #include "mainapp.h"
+#include "bms_uart.h"
 #include "debug_log.h"
 
 extern RTC_HandleTypeDef hrtc;
@@ -72,11 +73,14 @@ void mainapp(void)
                      (unsigned long)MAINAPP_SLEEP_WAKEUP_HOURS);
     }
 
+    bms_uart_task();
+
     now = HAL_GetTick();
     if ((now - last_update_tick) >= MAINAPP_BMS_UPDATE_MS) {
         BMS_Update();
         last_update_tick = now;
         tracking = BMS_GetTracking();
+        bms_uart_task();
 
         if (MainApp_HasChargeDischargeActivity(tracking)) {
             last_activity_tick = now;
@@ -94,6 +98,7 @@ void mainapp(void)
             sleep_rc = power_manager_enter_low_power_sleep(MAINAPP_SLEEP_WAKEUP_MS);
             wake_source = power_manager_get_and_clear_wakeup_source();
             BMS_Update();
+            bms_uart_task();
             now = HAL_GetTick();
             last_update_tick = now;
 
@@ -107,6 +112,10 @@ void mainapp(void)
                 allow_immediate_sleep = false;
                 last_activity_tick = now;
                 BMS_LOG_INFO("wake gpio");
+            } else if ((wake_source & POWER_MANAGER_WAKEUP_UART) != 0U) {
+                allow_immediate_sleep = false;
+                last_activity_tick = now;
+                BMS_LOG_INFO("wake uart");
             } else if ((wake_source & POWER_MANAGER_WAKEUP_RTC) != 0U) {
                 allow_immediate_sleep = true;
                 BMS_LOG_INFO("wake rtc");

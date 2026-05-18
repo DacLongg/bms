@@ -27,6 +27,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "App/mainapp.h"
+#include "bms_uart.h"
 #include "debug_log.h"
 /* USER CODE END Includes */
 
@@ -96,8 +97,12 @@ int main(void)
   MX_RTC_Init();
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
+#if BMS_UART_PROTOCOL_ENABLE
+  bms_uart_init(&huart2);
+#else
   debug_log_init(&huart2);
   BMS_LOG_INFO("boot");
+#endif
 
   /* USER CODE END 2 */
 

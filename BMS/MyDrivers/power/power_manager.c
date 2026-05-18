@@ -77,6 +77,12 @@ void power_manager_notify_gpio_wakeup(void)
                                                                      POWER_MANAGER_WAKEUP_GPIO);
 }
 
+void power_manager_notify_uart_wakeup(void)
+{
+    g_power_manager_wakeup_source = (power_manager_wakeup_source_t)(g_power_manager_wakeup_source |
+                                                                     POWER_MANAGER_WAKEUP_UART);
+}
+
 power_manager_wakeup_source_t power_manager_get_and_clear_wakeup_source(void)
 {
     power_manager_wakeup_source_t source = g_power_manager_wakeup_source;
