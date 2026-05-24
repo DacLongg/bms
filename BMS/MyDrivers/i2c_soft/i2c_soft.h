@@ -26,8 +26,9 @@ typedef uint8_t Std_ReturnType;
 
 #define  I2C_SCL_ON             HAL_GPIO_WritePin(I2C_PORT, I2C_SCL_PIN, GPIO_PIN_SET);
 #define  I2C_SCL_OFF            HAL_GPIO_WritePin(I2C_PORT, I2C_SCL_PIN, GPIO_PIN_RESET);
+#define  I2C_SCL_READ           HAL_GPIO_ReadPin(I2C_PORT, I2C_SCL_PIN)
 
-#define  I2C_TIME_DELAY         10
+#define  I2C_TIME_DELAY         10U     /* us */
 
 
 void I2C_Soft_Init(void);

@@ -62,8 +62,9 @@ static uint16_t g_unseal_key_step_1;
 static uint16_t g_unseal_key_step_2;
 static uint16_t g_full_access_key_step_1;
 static uint16_t g_full_access_key_step_2;
+/* Board 10S routes cells consecutively from VC0 to VC10. */
 static const byte g_connected_cell_to_vc_bit[10] = {
-    0U, 1U, 2U, 3U, 5U, 7U, 9U, 11U, 13U, 15U
+    0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 9U
 };
 
 static bool bq76952_write_register(byte reg, const byte *data, uint16_t len);
@@ -299,7 +300,7 @@ byte bq76952_getMfgStatusInitRegister(void)
 
 int bq76952_getCellVoltage(byte cellNumber)
 {
-    return (int)bq76952_directCommand(CELL_NO_TO_ADDR(cellNumber));
+    return (int)(int16_t)bq76952_directCommand(CELL_NO_TO_ADDR(cellNumber));
 }
 
 /* Đọc toàn bộ 16 kênh cell của IC, kể cả các kênh không dùng. */
@@ -326,16 +327,9 @@ void bq76952_getOnlyConnectedCellVoltages(int *cellArray)
     }
 
     bq76952_getAllCellVoltages(allcells);
-    cellArray[0] = allcells[0];
-    cellArray[1] = allcells[1];
-    cellArray[2] = allcells[2];
-    cellArray[3] = allcells[3];
-    cellArray[4] = allcells[5];
-    cellArray[5] = allcells[7];
-    cellArray[6] = allcells[9];
-    cellArray[7] = allcells[11];
-    cellArray[8] = allcells[13];
-    cellArray[9] = allcells[15];
+    for (byte cell = 0U; cell < 10U; ++cell) {
+        cellArray[cell] = allcells[g_connected_cell_to_vc_bit[cell]];
+    }
 }
 
 int bq76952_getCurrent(void)

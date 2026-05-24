@@ -8,6 +8,8 @@
       "request": "launch",
       "type": "cortex-debug",
       "servertype": "openocd",
+      "gdbPath": "/usr/bin/gdb-multiarch",
+      "objdumpPath": "/usr/bin/arm-none-eabi-objdump",
       "configFiles": [
         "interface/stlink.cfg",
         "target/stm32l0.cfg"

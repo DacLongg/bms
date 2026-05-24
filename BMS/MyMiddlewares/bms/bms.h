@@ -30,7 +30,8 @@
 #define BMS_UNDERTEMP_CUTOFF_C                      0
 #define BMS_UNDERTEMP_RECOVER_C                     5
 
-#define BMS_BQ_VCELL_MODE_10S                       0xAAAFU
+/* Hardware 10S uses consecutive BQ cell channels VC0..VC10. */
+#define BMS_BQ_VCELL_MODE_10S                       0x03FFU
 #define BMS_BQ_SENSE_RESISTOR_UOHM                  50UL
 #define BMS_BQ_PROTECTION_DELAY_MS                  100U
 #define BMS_CURRENT_CHARGE_IS_POSITIVE              1
