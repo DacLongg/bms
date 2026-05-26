@@ -12,11 +12,11 @@
 #define BMS_ALERT_POLL_FALLBACK_MS 1000U
 #define BMS_SHUT_HOLD_MS 1100U
 #define BMS_BAT_ADC_SAMPLE_MS 1000U
-#define BMS_BAT_ADC_SETTLE_MS 1U
+#define BMS_BAT_ADC_SETTLE_MS 5U
 #define BMS_BAT_ADC_REF_MV 3300UL
 #define BMS_BAT_ADC_COUNTS 4095UL
-#define BMS_BAT_ADC_DIVIDER_NUM 13300UL
-#define BMS_BAT_ADC_DIVIDER_DEN 3300UL
+#define BMS_BAT_ADC_DIVIDER_NUM 678300UL
+#define BMS_BAT_ADC_DIVIDER_DEN 13300UL
 
 static BMS_Tracking_t g_bms_tracking;
 static uint32_t g_last_update_tick;
@@ -55,7 +55,7 @@ static void BMS_UpdateBalancing(BMS_Tracking_t *tracking, uint32_t now);
 static void BMS_LoadPersistedData(BMS_Tracking_t *tracking);
 static void BMS_SavePersistedDataIfNeeded(const BMS_Tracking_t *tracking, uint32_t now);
 #if BMS_DEBUG_LOG_ENABLE
-static const char *BMS_StateName(BMS_State_t state);
+const char *BMS_StateName(BMS_State_t state);
 #endif
 static bool BMS_AllCellsAtOrBelow(const BMS_Tracking_t *tracking, uint16_t threshold_mV);
 static bool BMS_AllCellsAtOrAbove(const BMS_Tracking_t *tracking, uint16_t threshold_mV);
@@ -241,8 +241,10 @@ static void BMS_ConfigureMonitor(void)
     uint32_t over_current_sense_mV;
 
     BMS_LOG_INFO("configure bq76952");
+    bq76952_configurePowerOutputs();
     bq76952_setVcellMode(BMS_BQ_VCELL_MODE_10S);
     bq76952_setDA_Config();
+    bq76952_setCurrentSenseCalibration();
     bq76952_setEnableProtectionsA();
     bq76952_setEnableProtectionsB();
     bq76952_setEnableProtectionsC();
@@ -271,13 +273,13 @@ static void BMS_ConfigureMonitor(void)
     bq76952_setDischargingTemperatureMaxLimit(BMS_DISCHARGE_OT_CUTOFF_C, 2U);
     bq76952_setCellBalancingEnabled(true);
 
-    over_current_sense_mV = ((uint32_t)BMS_OVER_CURRENT_MA * BMS_BQ_SENSE_RESISTOR_UOHM) / 1000000UL;
+    over_current_sense_mV = (((uint32_t)BMS_OVER_CURRENT_MA * BMS_BQ_SENSE_RESISTOR_UOHM) + 500000UL) / 1000000UL;
     if (over_current_sense_mV < 4UL) {
         over_current_sense_mV = 4UL;
     }
     bq76952_setChargingOvercurrentProtection((unsigned int)over_current_sense_mV, 50U);
     bq76952_setDischargingOvercurrentProtection((unsigned int)over_current_sense_mV, 50U);
-    bq76952_setDischargingShortcircuitProtection(SCD_80, 30U);
+    bq76952_setDischargingShortcircuitProtection(SCD_60, 30U);
 
     if (!bq76952_areFETs_Enabled()) {
         bq76952_setFET_ENABLE();
@@ -328,24 +330,31 @@ static void BMS_SetBatSenseEnable(bool enabled)
 static void BMS_HandleHardwareSignals(BMS_Tracking_t *tracking, uint32_t now)
 {
     bool should_service_alert;
+    bool alert_signal_active;
 
     if (tracking == NULL) {
         return;
     }
 
+    g_dchg_signal_active = (HAL_GPIO_ReadPin(DCHG_GPIO_Port, DCHG_Pin) == GPIO_PIN_SET);
+    g_ddsg_signal_active = (HAL_GPIO_ReadPin(DDSG_GPIO_Port, DDSG_Pin) == GPIO_PIN_SET);
+    alert_signal_active = (HAL_GPIO_ReadPin(ALERT_GPIO_Port, ALERT_Pin) == GPIO_PIN_SET);
+
     tracking->chargeGateFaultSignal = g_dchg_signal_active;
     tracking->dischargeGateFaultSignal = g_ddsg_signal_active;
 
     should_service_alert = g_alert_irq_pending ||
+                           alert_signal_active ||
                            ((now - g_last_alert_service_tick) >= BMS_ALERT_POLL_FALLBACK_MS);
     if (!should_service_alert) {
+        tracking->alertActive = false;
         return;
     }
 
     g_alert_irq_pending = false;
     g_last_alert_service_tick = now;
     tracking->alertCounter = g_alert_irq_counter;
-    tracking->alertActive = (bq76952_getAlertStatusRegister() != 0U);
+    tracking->alertActive = alert_signal_active || (bq76952_getAlertStatusRegister() != 0U);
     (void)bq76952_getAlertRawStatusRegister();
 }
 
@@ -388,26 +397,20 @@ static void BMS_UpdateBatteryAdc(BMS_Tracking_t *tracking, uint32_t now)
 
 static void BMS_ReadMeasurements(BMS_Tracking_t *tracking)
 {
-    int raw_cell_voltage[BMS_NUMBER_OF_CELLS];
+    // int raw_cell_voltage[BMS_NUMBER_OF_CELLS];
     bq76952_battery_status_t batt_status;
 
     if (tracking == NULL) {
         return;
     }
 
-    bq76952_getOnlyConnectedCellVoltages(raw_cell_voltage);
-    for (uint8_t i = 0U; i < BMS_NUMBER_OF_CELLS; ++i) {
-        if (raw_cell_voltage[i] < 0) {
-            tracking->cellVoltages[i] = 0U;
-        } else {
-            tracking->cellVoltages[i] = (uint16_t)raw_cell_voltage[i];
-        }
-    }
+    bq76952_getOnlyConnectedCellVoltages(tracking->cellVoltages);
+
 
     tracking->stackVoltage = (uint16_t)bq76952_getStackVoltage();
-    tracking->current_mA = (int32_t)bq76952_getCurrentNow();
+    tracking->current_mA = (int32_t)bq76952_getCurrentAvg();
     tracking->temperature[0] = (int16_t)bq76952_getThermistorTemp(TS1);
-    tracking->temperature[1] = (int16_t)bq76952_getThermistorTemp(TS2);
+    tracking->temperature[1] = (int16_t)bq76952_getThermistorTemp(TS3);
     tracking->charging = bq76952_isCharging();
     tracking->discharging = bq76952_isDischarging();
     tracking->chargeFetEnabled = tracking->charging;
@@ -840,7 +843,7 @@ static void BMS_SavePersistedDataIfNeeded(const BMS_Tracking_t *tracking, uint32
 }
 
 #if BMS_DEBUG_LOG_ENABLE
-static const char *BMS_StateName(BMS_State_t state)
+const char *BMS_StateName(BMS_State_t state)
 {
     switch (state) {
     case BMS_STATE_INIT:
@@ -906,4 +909,13 @@ static int32_t BMS_AbsCurrent(int32_t current_mA)
         return -current_mA;
     }
     return current_mA;
+}
+
+void BMS_Set_5V_Output(bool enabled)
+{
+    if (enabled) {
+        bq76952_setEnableRegulator(true, true); // enable 5V regulator in auto mode (enabled when either charge or discharge FET is on)
+    } else {
+        bq76952_setEnableRegulator(false, false); // disable 5V regulator
+    }
 }

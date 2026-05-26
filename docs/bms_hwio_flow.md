@@ -11,13 +11,13 @@
 
 ## 2) Cơ chế ngắt cho toàn bộ input
 - `ALERT`, `DCHG`, `DDSG` đều chạy `GPIO_MODE_IT_RISING_FALLING`.
-- `DCHG/DDSG` không còn poll theo vòng lặp; mức logic được cập nhật trong `HAL_GPIO_EXTI_Callback()`.
-- `ALERT` set cờ xử lý nhanh qua `BMS_NotifyAlertInterrupt()`; ngoài ra vẫn có poll fallback 1s để chống miss IRQ.
+- `DCHG/DDSG` được cập nhật cả trong `HAL_GPIO_EXTI_Callback()` và được poll lại trong mỗi chu kỳ `BMS_Update()`.
+- `ALERT` set cờ xử lý nhanh qua `BMS_NotifyAlertInterrupt()`; ngoài ra pin ALERT cũng được poll theo chu kỳ và vẫn có fallback 1s để chống miss IRQ.
 
 ## 3) Luồng phần cứng trong `BMS_Update`
 1. `BMS_UpdateShutdownPulse()` xử lý pulse `SHUT` nếu đã request.
 2. `BMS_ReadMeasurements()` đọc dữ liệu BQ cơ bản.
-3. `BMS_HandleHardwareSignals()` đồng bộ trạng thái `DCHG/DDSG/ALERT` từ cơ chế IRQ.
+3. `BMS_HandleHardwareSignals()` đồng bộ trạng thái `DCHG/DDSG/ALERT` từ cả IRQ và polling GPIO.
 4. `BMS_UpdateBatteryAdc()`:
 - bật `BATS_EN`
 - chờ settle ngắn
@@ -32,5 +32,5 @@
 - `BMS_RequestShutdown()` phát xung `SHUT` (>1s).
 
 ## 5) Lưu ý
-- `BAT_ADC` là ước lượng theo tỉ lệ cầu chia (13300/3300), dùng cho giám sát nhanh.
+- `BAT_ADC` là ước lượng theo tỉ lệ cầu chia R86/R85 = 665k/13.3k, dùng cho giám sát nhanh.
 - Nếu đo thực tế lệch, cần hiệu chuẩn lại hệ số divider và `Vref` theo board thực.

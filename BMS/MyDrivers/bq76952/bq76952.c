@@ -29,6 +29,9 @@
 #define CMD_HW_VERSION              0x0003U
 #define CMD_COV_SNAPSHOT            0x0081U
 #define SUBCMD_CB_ACTIVE_CELLS      0x0083U
+#define SUBCMD_SLEEP_ENABLE         0x0099U
+#define SUBCMD_SLEEP_DISABLE        0x009AU
+#define SUBCMD_REG12_CONTROL        0x0098U
 /* Các subcommand phục vụ chuỗi ghi OTP. */
 #define SUBCMD_OTP_WR_CHECK         0x00A0U
 #define SUBCMD_OTP_WRITE            0x00A1U
@@ -53,6 +56,9 @@
 #define CELL_NO_TO_ADDR(cell_no) ((byte)(0x14U + ((cell_no) * 2U)))
 #define LOW_BYTE(data) ((byte)((data) & 0x00FFU))
 #define HIGH_BYTE(data) ((byte)(((data) >> 8) & 0x00FFU))
+#define REG12_CONFIG(reg1v, reg1_en, reg2v, reg2_en) \
+    ((byte)((((reg2v) & 0x07U) << 5U) | ((reg2_en) ? 0x10U : 0x00U) | \
+            (((reg1v) & 0x07U) << 1U) | ((reg1_en) ? 0x01U : 0x00U)))
 #define BQ_READ_STATUS_BIT(value, bit) (((value) >> (bit)) & 0x01U)
 
 
@@ -63,18 +69,21 @@ static uint16_t g_unseal_key_step_2;
 static uint16_t g_full_access_key_step_1;
 static uint16_t g_full_access_key_step_2;
 /* Board 10S routes cells consecutively from VC0 to VC10. */
-static const byte g_connected_cell_to_vc_bit[10] = {
-    0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 9U
-};
+// static const byte g_connected_cell_to_vc_bit[10] = {
+//     0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 9U
+// };
 
 static bool bq76952_write_register(byte reg, const byte *data, uint16_t len);
 static bool bq76952_read_register(byte reg, byte *data, uint16_t len);
 static bool bq76952_read_raw(byte *data, uint16_t len);
 static unsigned int bq76952_directCommand(byte command);
 static void bq76952_subCommand(unsigned int data);
+static void bq76952_subCommandWithU8Data(unsigned int command, byte data);
 static void bq76952_subCommandWithU16Data(unsigned int command, uint16_t data);
 static int16_t bq76952_subCommandResponseInt(byte offset);
 static byte bq76952_calculateChecksum(byte oldChecksum, byte data);
+static byte bq76952_makeReg12Control(bool enable_reg1, bool enable_reg2);
+static void bq76952_applyReg12Control(bool enable_reg1, bool enable_reg2);
 static byte bq76952_make_pin_config(byte pin_fxn, bool active_low);
 static void bq76952_writeDataMemory(unsigned int addr, int16_t data, byte noOfBytes);
 static void bq76952_writeDataMemoryWithoutConfigUpdate(unsigned int addr, int16_t data, byte noOfBytes);
@@ -123,6 +132,27 @@ static void bq76952_subCommand(unsigned int data)
     payload[0] = LOW_BYTE(data);
     payload[1] = HIGH_BYTE(data);
     (void)bq76952_write_register(CMD_DIR_SUBCMD_LOW, payload, 2U);
+}
+
+static void bq76952_subCommandWithU8Data(unsigned int command, byte data)
+{
+    byte payload[3];
+    byte footer[2];
+    byte checksum = 0U;
+
+    payload[0] = LOW_BYTE(command);
+    payload[1] = HIGH_BYTE(command);
+    payload[2] = data;
+
+    for (byte i = 0U; i < 3U; ++i) {
+        checksum = bq76952_calculateChecksum(checksum, payload[i]);
+    }
+
+    footer[0] = checksum;
+    footer[1] = 0x05U;
+
+    (void)bq76952_write_register(CMD_DIR_SUBCMD_LOW, payload, 3U);
+    (void)bq76952_write_register(CMD_DIR_RESP_CHKSUM, footer, 2U);
 }
 
 /* Gửi subcommand có payload 16-bit. Dùng cho các lệnh runtime như manual cell balance. */
@@ -186,6 +216,21 @@ static byte bq76952_calculateChecksum(byte oldChecksum, byte data)
     }
 
     return (byte)(~oldChecksum);
+}
+
+static byte bq76952_makeReg12Control(bool enable_reg1, bool enable_reg2)
+{
+    return REG12_CONFIG(BQ_REG1_VOLTAGE_CODE,
+                        enable_reg1,
+                        BQ_REG2_VOLTAGE_CODE,
+                        enable_reg2);
+}
+
+static void bq76952_applyReg12Control(bool enable_reg1, bool enable_reg2)
+{
+    bq76952_subCommandWithU8Data(SUBCMD_REG12_CONTROL,
+                                 bq76952_makeReg12Control(enable_reg1, enable_reg2));
+    HAL_Delay(1U);
 }
 
 static byte bq76952_make_pin_config(byte pin_fxn, bool active_low)
@@ -304,50 +349,47 @@ int bq76952_getCellVoltage(byte cellNumber)
 }
 
 /* Đọc toàn bộ 16 kênh cell của IC, kể cả các kênh không dùng. */
-void bq76952_getAllCellVoltages(int *cellArray)
+void bq76952_getAllCellVoltages(uint16_t *cellArray, uint8_t numCells)
 {
     if (cellArray == NULL) {
         return;
     }
+    int CellV = 0;
 
-    for (byte index = 0U; index < 16U; ++index) {
-        cellArray[index] = bq76952_getCellVoltage(index);
+    for (byte index = 0U; index < numCells; ++index) {
+        CellV = bq76952_getCellVoltage(index);
+        cellArray[index] = CellV < 0 ? 0 : CellV;
     }
 }
 
 /* Mapping này phản ánh cách pack hiện tại nối 10 cell vào 16 kênh đo của BQ76952.
  * Các phần tử bị bỏ qua là các cell sense không được dùng trong phần cứng này.
  */
-void bq76952_getOnlyConnectedCellVoltages(int *cellArray)
+void bq76952_getOnlyConnectedCellVoltages(uint16_t *cellArray)
 {
-    int allcells[16];
-
     if (cellArray == NULL) {
         return;
     }
 
-    bq76952_getAllCellVoltages(allcells);
-    for (byte cell = 0U; cell < 10U; ++cell) {
-        cellArray[cell] = allcells[g_connected_cell_to_vc_bit[cell]];
-    }
+    bq76952_getAllCellVoltages(cellArray, 10U);
+    // for (byte cell = 0U; cell < 10U; ++cell) {
+    //     cellArray[cell] = allcells[cell];
+    // }
 }
 
 int bq76952_getCurrent(void)
 {
-    return (int)bq76952_directCommand(CMD_DIR_CC2_CUR);
+    return (int)(int16_t)bq76952_directCommand(CMD_DIR_CC2_CUR);
 }
 
 int bq76952_getCurrentNow(void)
 {
-    /* 0x0075 trả về một block dữ liệu phép đo tức thời; offset 22 là current now. */
-    bq76952_subCommand(0x0075U);
-    HAL_Delay(1U);
-    return bq76952_subCommandResponseInt(22U);
+    return bq76952_getCurrent();
 }
 
 int bq76952_getCurrentAvg(void)
 {
-    /* Cùng block 0x0075, offset 20 là averaged current. */
+    /* 0x0075 offset 20 là CC3 Current, tức dòng trung bình theo cấu hình CC3 Samples. */
     bq76952_subCommand(0x0075U);
     HAL_Delay(1U);
     return bq76952_subCommandResponseInt(20U);
@@ -651,7 +693,7 @@ void bq76952_setCellBalanceMask(uint16_t logical_cell_mask)
 
     for (byte cell = 0U; cell < 10U; ++cell) {
         if ((logical_cell_mask & (uint16_t)(1U << cell)) != 0U) {
-            bq_vc_mask |= (uint16_t)(1U << g_connected_cell_to_vc_bit[cell]);
+            bq_vc_mask |= (uint16_t)(1U << cell);
         }
     }
 
@@ -810,10 +852,38 @@ void bq76952_setEnablePreRegulator(void)
     bq76952_writeDataMemory(REG0_CONFIG, 0x01, 1U);
 }
 
+void bq76952_configurePowerOutputs(void)
+{
+    bq76952_setEnablePreRegulator();
+    bq76952_setEnableRegulator(true, true);
+}
+
+void bq76952_prepareSleepWithReg2(void)
+{
+    bq76952_applyReg12Control(true, true);
+    bq76952_subCommand(SUBCMD_SLEEP_ENABLE);
+    HAL_Delay(1U);
+}
+
+void bq76952_resumeFromSleep(void)
+{
+    bq76952_subCommand(SUBCMD_SLEEP_DISABLE);
+    HAL_Delay(1U);
+    bq76952_applyReg12Control(true, true);
+}
+
 void bq76952_setDA_Config(void)
 {
     /* 0x01 là preset DA configuration mà project này đang dùng. */
     bq76952_writeDataMemory(DA_CONFIGURATION, 0x01, 1U);
+}
+
+void bq76952_setCurrentSenseCalibration(void)
+{
+    bq76952_writeDataMemory(CC_GAIN, 0x41F2, 2U);
+    bq76952_writeDataMemory(CC_GAIN + 2U, 0x416F, 2U);
+    bq76952_writeDataMemory(CAPACITY_GAIN, 0x1C6A, 2U);
+    bq76952_writeDataMemory(CAPACITY_GAIN + 2U, 0x4A88, 2U);
 }
 
 void bq76952_setSF_AlertMask_A(void)
@@ -833,12 +903,10 @@ void bq76952_setSF_AlertMask_C(void)
 
 void bq76952_setEnableRegulator(bool enable_reg1, bool enable_reg2)
 {
-    /* 0xCC giữ các bit nền của REG12_CONTROL, sau đó OR thêm bit enable cho REG1/REG2. */
-    byte reg12 = 0xCCU;
+    byte reg12 = bq76952_makeReg12Control(enable_reg1, enable_reg2);
 
-    reg12 |= enable_reg1 ? 0x01U : 0x00U;
-    reg12 |= enable_reg2 ? 0x10U : 0x00U;
     bq76952_writeDataMemory(REG12_CONTROL, reg12, 1U);
+    bq76952_applyReg12Control(enable_reg1, enable_reg2);
 }
 
 void bq76952_setAlertPinConfig(void)
@@ -1006,68 +1074,68 @@ void bq76952_handle_alarm(void)
     (void)bq76952_HandleAlarm();
 }
 
-void bq76952_check_batt_status(void)
-{
-    int cellArray[16];
-    bool isDischarging;
-    bool isCharging;
-    bq76952_battery_status_t batt_status;
-    unsigned int alarmStatus;
-    unsigned int cov[16] = {0};
-    unsigned int manufacturing_status;
-    int current_now;
-    bq76952_temp_t temperature_status;
-    float internal_temp;
-    unsigned int stack_voltage;
-    int cell_voltage;
-    unsigned int alert_raw;
-    bq76952_protection_t status;
-    bq76952_safety_alert_c_t safety_alert_c;
+// void bq76952_check_batt_status(void)
+// {
+//     int cellArray[16];
+//     bool isDischarging;
+//     bool isCharging;
+//     bq76952_battery_status_t batt_status;
+//     unsigned int alarmStatus;
+//     unsigned int cov[16] = {0};
+//     unsigned int manufacturing_status;
+//     int current_now;
+//     bq76952_temp_t temperature_status;
+//     float internal_temp;
+//     unsigned int stack_voltage;
+//     int cell_voltage;
+//     unsigned int alert_raw;
+//     bq76952_protection_t status;
+//     bq76952_safety_alert_c_t safety_alert_c;
 
-    /* Hàm này chủ yếu phục vụ debug/runtime inspection, chưa có logic xử lý fault hoàn chỉnh. */
-    HAL_Delay(50U);
-    bq76952_getAllCellVoltages(cellArray);
-    alarmStatus = bq76952_getAlertStatusRegister();
-    isDischarging = bq76952_isDischarging();
-    isCharging = bq76952_isCharging();
-    batt_status = bq76952_getBatteryStatusRegister();
+//     /* Hàm này chủ yếu phục vụ debug/runtime inspection, chưa có logic xử lý fault hoàn chỉnh. */
+//     HAL_Delay(50U);
+//     bq76952_getAllCellVoltages(cellArray, 10);
+//     alarmStatus = bq76952_getAlertStatusRegister();
+//     isDischarging = bq76952_isDischarging();
+//     isCharging = bq76952_isCharging();
+//     batt_status = bq76952_getBatteryStatusRegister();
 
-    if (batt_status.bits.FULL_RESET_OCCURED) {
-    }
+//     if (batt_status.bits.FULL_RESET_OCCURED) {
+//     }
 
-    (void)bq76952_readDataMemory(0x9236U, 1);
-    (void)bq76952_readDataMemory(0x9286U, 1);
+//     (void)bq76952_readDataMemory(0x9236U, 1);
+//     (void)bq76952_readDataMemory(0x9286U, 1);
 
-    manufacturing_status = bq76952_getManufacturingStatus();
-    current_now = bq76952_getCurrentNow();
-    temperature_status = bq76952_getTemperatureStatus();
-    internal_temp = bq76952_getInternalTemp();
-    stack_voltage = bq76952_getStackVoltage();
-    cell_voltage = bq76952_getCellVoltage(15U);
-    alert_raw = bq76952_getAlertRawStatusRegister();
-    status = bq76952_getProtectionStatus();
-    safety_alert_c = bq76952_getSafetyAlert_C();
+//     manufacturing_status = bq76952_getManufacturingStatus();
+//     current_now = bq76952_getCurrentNow();
+//     temperature_status = bq76952_getTemperatureStatus();
+//     internal_temp = bq76952_getInternalTemp();
+//     stack_voltage = bq76952_getStackVoltage();
+//     cell_voltage = bq76952_getCellVoltage(15U);
+//     alert_raw = bq76952_getAlertRawStatusRegister();
+//     status = bq76952_getProtectionStatus();
+//     safety_alert_c = bq76952_getSafetyAlert_C();
 
-    (void)alarmStatus;
-    (void)isDischarging;
-    (void)isCharging;
-    (void)manufacturing_status;
-    (void)current_now;
-    (void)temperature_status;
-    (void)internal_temp;
-    (void)stack_voltage;
-    (void)cell_voltage;
-    (void)alert_raw;
-    (void)safety_alert_c;
+//     (void)alarmStatus;
+//     (void)isDischarging;
+//     (void)isCharging;
+//     (void)manufacturing_status;
+//     (void)current_now;
+//     (void)temperature_status;
+//     (void)internal_temp;
+//     (void)stack_voltage;
+//     (void)cell_voltage;
+//     (void)alert_raw;
+//     (void)safety_alert_c;
 
-    if (status.bits.CELL_OV) {
-        for (int i = 0; i < 16; ++i) {
-            cov[i] = bq76952_getCOVSnapshot((byte)i);
-        }
-    }
+//     if (status.bits.CELL_OV) {
+//         for (int i = 0; i < 16; ++i) {
+//             cov[i] = bq76952_getCOVSnapshot((byte)i);
+//         }
+//     }
 
-    if (status.bits.SC_DCHG) {
-    }
+//     if (status.bits.SC_DCHG) {
+//     }
 
-    (void)cov;
-}
+//     (void)cov;
+// }

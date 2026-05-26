@@ -32,7 +32,7 @@
 
 /* Hardware 10S uses consecutive BQ cell channels VC0..VC10. */
 #define BMS_BQ_VCELL_MODE_10S                       0x03FFU
-#define BMS_BQ_SENSE_RESISTOR_UOHM                  50UL
+#define BMS_BQ_SENSE_RESISTOR_UOHM                  500UL
 #define BMS_BQ_PROTECTION_DELAY_MS                  100U
 #define BMS_CURRENT_CHARGE_IS_POSITIVE              1
 #define BMS_FLASH_SAVE_INTERVAL_MS                  600000UL
@@ -122,5 +122,8 @@ bool BMS_IsFaultActive(void);
 void BMS_Error_Handler(void);
 void BMS_NotifyAlertInterrupt(void);
 void BMS_RequestShutdown(void);
+void BMS_Set_5V_Output(bool enabled);
+
+const char *BMS_StateName(BMS_State_t state);
 
 #endif

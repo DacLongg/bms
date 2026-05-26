@@ -8,11 +8,69 @@ extern UART_HandleTypeDef huart2;
 extern LPTIM_HandleTypeDef hlptim1;
 
 #define MAINAPP_BMS_UPDATE_MS 100U
-#define MAINAPP_IDLE_BEFORE_SLEEP_MINUTES 5U
+#define MAINAPP_IDLE_BEFORE_SLEEP_MINUTES 1U
 #define MAINAPP_SLEEP_WAKEUP_HOURS 2U
 
-#define MAINAPP_IDLE_BEFORE_SLEEP_MS ((uint32_t)(MAINAPP_IDLE_BEFORE_SLEEP_MINUTES) * 60UL * 1000UL)
+#define MAINAPP_IDLE_BEFORE_SLEEP_MS ((uint32_t)(MAINAPP_IDLE_BEFORE_SLEEP_MINUTES) * 10UL * 1000UL)
 #define MAINAPP_SLEEP_WAKEUP_MS ((uint32_t)(MAINAPP_SLEEP_WAKEUP_HOURS) * 60UL * 60UL * 1000UL)
+
+#if BMS_DEBUG_LOG_ENABLE
+// static const char *BMS_StateName(BMS_State_t state)
+// {
+//     switch (state) {
+//     case BMS_STATE_INIT:
+//         return "INIT";
+//     case BMS_STATE_NORMAL:
+//         return "NORMAL";
+//     case BMS_STATE_CHARGE_PROTECT:
+//         return "CHG_PROT";
+//     case BMS_STATE_DISCHARGE_PROTECT:
+//         return "DCHG_PROT";
+//     case BMS_STATE_FAULT:
+//         return "FAULT";
+//     default:
+//         return "UNKNOWN";
+//     }
+// }
+
+static void MainApp_LogBatteryInfo(const BMS_Tracking_t *tracking)
+{
+    if (tracking == NULL) {
+        return;
+    }
+
+    BMS_LOG_INFO("bat c=%lu st=%s pack=%u/%u cur=%ld t=%d/%d",
+                 (unsigned long)tracking->circle_counter,
+                 BMS_StateName(tracking->state),
+                 tracking->stackVoltage,
+                 tracking->batAdcEstimatedPack_mV,
+                 (long)tracking->current_mA,
+                 (int)tracking->temperature[0],
+                 (int)tracking->temperature[1]);
+    BMS_LOG_INFO("cell min = %u : avg = %u : max = %u : delta = %u : bal = 0x%03x",
+                 tracking->minCellVoltage,
+                 tracking->averageCellVoltage,
+                 tracking->maxCellVoltage,
+                 tracking->deltaCellVoltage,
+                 tracking->balanceMask);
+    BMS_LOG_INFO("cell %u %u %u %u %u %u %u %u %u %u",
+                 tracking->cellVoltages[0],
+                 tracking->cellVoltages[1],
+                 tracking->cellVoltages[2],
+                 tracking->cellVoltages[3],
+                 tracking->cellVoltages[4],
+                 tracking->cellVoltages[5],
+                 tracking->cellVoltages[6],
+                 tracking->cellVoltages[7],
+                 tracking->cellVoltages[8],
+                 tracking->cellVoltages[9]);
+}
+#else
+static void MainApp_LogBatteryInfo(const BMS_Tracking_t *tracking)
+{
+    (void)tracking;
+}
+#endif
 
 static bool MainApp_IsPackSleepEligible(const BMS_Tracking_t *tracking)
 {
@@ -63,6 +121,7 @@ void mainapp(void)
     const BMS_Tracking_t *tracking;
 
     if (!initialized) {
+        Enable_Power_Battery();
         BMS_Init();
         now = HAL_GetTick();
         last_activity_tick = now;
@@ -71,6 +130,7 @@ void mainapp(void)
         BMS_LOG_INFO("mainapp init sleepX=%lu min wakeY=%lu h",
                      (unsigned long)MAINAPP_IDLE_BEFORE_SLEEP_MINUTES,
                      (unsigned long)MAINAPP_SLEEP_WAKEUP_HOURS);
+        // BMS_Set_5V_Output(false);
     }
 
     bms_uart_task();
@@ -81,6 +141,7 @@ void mainapp(void)
         last_update_tick = now;
         tracking = BMS_GetTracking();
         bms_uart_task();
+        MainApp_LogBatteryInfo(tracking);
 
         if (MainApp_HasChargeDischargeActivity(tracking)) {
             last_activity_tick = now;
@@ -95,8 +156,12 @@ void mainapp(void)
             BMS_LOG_INFO("sleep enter bq_sleep=%u idle_ms=%lu",
                          tracking->bqSleepMode ? 1U : 0U,
                          (unsigned long)(now - last_activity_tick));
+            bq76952_prepareSleepWithReg2();
+            Disable_Power_Battery();
             sleep_rc = power_manager_enter_low_power_sleep(MAINAPP_SLEEP_WAKEUP_MS);
             wake_source = power_manager_get_and_clear_wakeup_source();
+            Enable_Power_Battery();
+            bq76952_resumeFromSleep();
             BMS_Update();
             bms_uart_task();
             now = HAL_GetTick();
@@ -125,5 +190,21 @@ void mainapp(void)
                 BMS_LOG_WARN("wake unknown");
             }
         }
+        BMS_LOG_INFO("update done state=%s chg = %s; Dis=%s faults:Ov:%s, Uv:%s,Ot:%s,Dt:%s,Ut:%s,Occ:%s,Dcc:%s,CGF:%s,DGF:%s,SC:%s,BQF:%s,Commu:%s",
+                     BMS_StateName(tracking->state),
+                     tracking->chargeDisabled ? "true" : "false",
+                     tracking->dischargeDisabled ? "true" : "false",
+                     tracking->faults.cellOverVoltage ? "true" : "false",
+                     tracking->faults.cellUnderVoltage ? "true" : "false",
+                     tracking->faults.chargeOverTemperature ? "true" : "false",
+                     tracking->faults.dischargeOverTemperature ? "true" : "false",
+                     tracking->faults.underTemperature ? "true" : "false",
+                     tracking->faults.chargeOverCurrent ? "true" : "false",
+                     tracking->faults.dischargeOverCurrent ? "true" : "false",
+                     tracking->chargeGateFaultSignal ? "true" : "false",
+                     tracking->dischargeGateFaultSignal ? "true" : "false",
+                     tracking->faults.shortCircuit ? "true" : "false",
+                     tracking->faults.bqSafetyFault ? "true" : "false",
+                     tracking->faults.communicationFault ? "true" : "false");
     }
 }

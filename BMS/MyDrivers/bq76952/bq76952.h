@@ -69,6 +69,8 @@ typedef enum {
  */
 #define REG0_CONFIG 0x9237U
 #define REG12_CONTROL 0x9236U
+#define CC_GAIN 0x91A8U
+#define CAPACITY_GAIN 0x91ACU
 #define CFETOFF_PIN_CONFIG 0x92FBU
 #define ALERT_PIN_CONFIG 0x92FCU
 #define DFETOFF_PIN_CONFIG 0x9300U
@@ -113,6 +115,9 @@ typedef enum {
  * Giá trị 0 nghĩa là bỏ qua hiệu chỉnh sụt áp do interconnect.
  */
 #define CELL_INTERCONNECT_RESISTANCE_MOHM 0U
+
+#define BQ_REG1_VOLTAGE_CODE 0x06U
+#define BQ_REG2_VOLTAGE_CODE 0x07U
 
 /* Các cờ bảo vệ đang active trong Safety Status A. */
 typedef union {
@@ -224,9 +229,9 @@ byte bq76952_getMfgStatusInitRegister(void);
 /* Đọc điện áp của 1 cell theo chỉ số 0..15, đơn vị mV. */
 int bq76952_getCellVoltage(byte cellNumber);
 /* Đọc toàn bộ 16 kênh cell voltage thô của IC. */
-void bq76952_getAllCellVoltages(int *cellArray);
+void bq76952_getAllCellVoltages(uint16_t *cellArray, uint8_t numCells);
 /* Đọc các cell thực sự đang được nối trên pack theo mapping phần cứng hiện tại. */
-void bq76952_getOnlyConnectedCellVoltages(int *cellArray);
+void bq76952_getOnlyConnectedCellVoltages(uint16_t *cellArray);
 /* Đọc dòng tức thời từ thanh ghi CC2 Current, dấu phụ thuộc chiều shunt. */
 int bq76952_getCurrent(void);
 /* Đọc dòng tức thời thông qua subcommand DA status snapshot. */
@@ -305,6 +310,14 @@ bool bq76952_is_OTP_already_programmed(void);
 bool bq76952_program_OTP(void);
 /* Bật pre-regulator nội bộ. */
 void bq76952_setEnablePreRegulator(void);
+/* Bật REG0, REG1 và REG2 theo nguồn trên board. */
+void bq76952_configurePowerOutputs(void);
+/* Cho phép BQ vào SLEEP tự động nhưng giữ REG2 cấp nguồn hệ thống. */
+void bq76952_prepareSleepWithReg2(void);
+/* Không cho BQ tự vào SLEEP nữa sau khi hệ thống thức. */
+void bq76952_resumeFromSleep(void);
+/* Cấu hình gain đo dòng cho shunt 0.5 mOhm trên board. */
+void bq76952_setCurrentSenseCalibration(void);
 /* Cấu hình DA (digital/analog) block theo preset của thư viện. */
 void bq76952_setDA_Config(void);
 /* Bỏ mask alert nhóm A để lỗi tương ứng có thể kéo chân ALERT. */

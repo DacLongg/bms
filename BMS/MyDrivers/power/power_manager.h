@@ -3,7 +3,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
-
+#include "stm32l0xx_hal.h"
 #include "lptim.h"
 #include "rtc.h"
 #include "usart.h"
@@ -39,7 +39,7 @@ void power_manager_notify_gpio_wakeup(void);
 void power_manager_notify_uart_wakeup(void);
 power_manager_wakeup_source_t power_manager_get_and_clear_wakeup_source(void);
 
-
-
+void Enable_Power_Battery(void);
+void Disable_Power_Battery(void);
 
 #endif
