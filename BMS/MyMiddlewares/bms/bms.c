@@ -258,7 +258,7 @@ static void BMS_ConfigureMonitor(void)
     bq76952_setFET_PredischargeStopDelta();
     bq76952_setCellInterconnectResistances();
     bq76952_setEnableTS1();
-    bq76952_setEnableTS2();
+    bq76952_setEnableTS3();
     bq76952_setAlertPinConfig();
     bq76952_setDFETOFFPinConfig(true, false);
     bq76952_setDCHGPinConfig(false);
