@@ -244,6 +244,8 @@ bool bq76952_areFETs_Enabled(void);
 unsigned int bq76952_getManufacturingStatus(void);
 /* Đọc tổng điện áp stack/battery, đơn vị mV. */
 unsigned int bq76952_getStackVoltage(void);
+/* Đọc điện áp tại chân PACK của BQ76952, đơn vị mV. */
+unsigned int bq76952_getPackVoltage(void);
 /* Đọc nhiệt độ die nội bộ của IC, trả về độ C. */
 float bq76952_getInternalTemp(void);
 /* Đọc nhiệt độ từ kênh thermistor/chân cảm biến được chọn, trả về độ C. */

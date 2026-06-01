@@ -357,6 +357,7 @@ static void bms_uart_handle_read_summary(uint8_t command, uint8_t length)
     (void)bms_uart_put_u8(payload, &payload_len, (uint8_t)tracking->currentDirection);
     (void)bms_uart_put_u16(payload, &payload_len, bms_uart_fault_bitmap(tracking));
     (void)bms_uart_put_u16(payload, &payload_len, tracking->stackVoltage);
+    (void)bms_uart_put_u16(payload, &payload_len, tracking->packVoltage);
     (void)bms_uart_put_u16(payload, &payload_len, tracking->batAdcEstimatedPack_mV);
     (void)bms_uart_put_i32(payload, &payload_len, tracking->current_mA);
     (void)bms_uart_put_u16(payload, &payload_len, tracking->minCellVoltage);

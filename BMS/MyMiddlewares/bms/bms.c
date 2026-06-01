@@ -203,6 +203,7 @@ static void BMS_ResetTracking(void)
     g_bms_tracking.currentDirection = BMS_CURRENT_IDLE;
     g_bms_tracking.circle_counter = 0U;
     g_bms_tracking.stackVoltage = 0U;
+    g_bms_tracking.packVoltage = 0U;
     g_bms_tracking.minCellVoltage = 0U;
     g_bms_tracking.maxCellVoltage = 0U;
     g_bms_tracking.averageCellVoltage = 0U;
@@ -408,6 +409,7 @@ static void BMS_ReadMeasurements(BMS_Tracking_t *tracking)
 
 
     tracking->stackVoltage = (uint16_t)bq76952_getStackVoltage();
+    tracking->packVoltage = (uint16_t)bq76952_getPackVoltage();
     tracking->current_mA = (int32_t)bq76952_getCurrentAvg();
     tracking->temperature[0] = (int16_t)bq76952_getThermistorTemp(TS1);
     tracking->temperature[1] = (int16_t)bq76952_getThermistorTemp(TS3);

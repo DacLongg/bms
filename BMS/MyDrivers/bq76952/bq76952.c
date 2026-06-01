@@ -14,6 +14,7 @@
 
 /* Direct commands đọc dữ liệu tức thời. */
 #define CMD_READ_VOLTAGE_STACK      0x34U
+#define CMD_READ_VOLTAGE_PACK       0x36U
 
 #define CMD_DIR_SAFETY_STATUS_A     0x03U
 #define CMD_DIR_SAFETY_ALERT_C      0x06U
@@ -425,6 +426,11 @@ bool bq76952_areFETs_Enabled(void)
 unsigned int bq76952_getStackVoltage(void)
 {
     return bq76952_directCommand(CMD_READ_VOLTAGE_STACK);
+}
+
+unsigned int bq76952_getPackVoltage(void)
+{
+    return bq76952_directCommand(CMD_READ_VOLTAGE_PACK);
 }
 
 

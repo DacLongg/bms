@@ -80,6 +80,7 @@ typedef struct {
     uint16_t averageCellVoltage;
     uint16_t deltaCellVoltage;
     uint16_t stackVoltage;
+    uint16_t packVoltage;
     uint16_t circle_counter;
 
     int32_t  current_mA;

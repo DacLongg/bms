@@ -99,8 +99,9 @@ Tài liệu này mô tả cách hoạt động của tất cả hàm trong file 
 3. Nếu cell voltage âm thì ép 0, ngược lại cast sang `uint16_t`.
 4. Đọc:
 - `stackVoltage`
+- `packVoltage`
 - `current_mA`
-- `temperature[0] = TS1`, `temperature[1] = TS2`
+- `temperature[0] = TS1`, `temperature[1] = TS3`
 - trạng thái `charging`, `discharging`
 - trạng thái FET global `fetsEnabled`
 5. Map tạm `chargeFetEnabled = charging`, `dischargeFetEnabled = discharging`.

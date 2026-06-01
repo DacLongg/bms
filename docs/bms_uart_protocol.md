@@ -60,6 +60,8 @@ Request payload: empty.
 
 Response data after `STATUS`:
 
+Current `protocolVersion` is `0x02`.
+
 | Offset | Type | Field |
 | --- | --- | --- |
 | 0 | u8 | protocolVersion |
@@ -70,22 +72,23 @@ Response data after `STATUS`:
 | 8 | u8 | currentDirection |
 | 9 | u16 | faultBitmap |
 | 11 | u16 | stackVoltage_mV |
-| 13 | u16 | batAdcEstimatedPack_mV |
-| 15 | i32 | current_mA |
-| 19 | u16 | minCellVoltage_mV |
-| 21 | u16 | maxCellVoltage_mV |
-| 23 | u16 | averageCellVoltage_mV |
-| 25 | u16 | deltaCellVoltage_mV |
-| 27 | i16 | temperature0_C |
-| 29 | i16 | temperature1_C |
-| 31 | u32 | chargeThroughput_mAh |
-| 35 | u32 | dischargeThroughput_mAh |
-| 39 | u32 | equivalentCycle_milliCycles |
-| 43 | u8 | fetBitmap |
-| 44 | u8 | balanceRequired |
-| 45 | u16 | balanceMask |
-| 47 | u32 | alertCounter |
-| 51 | u16 | circleCounter |
+| 13 | u16 | packVoltage_mV |
+| 15 | u16 | batAdcEstimatedPack_mV |
+| 17 | i32 | current_mA |
+| 21 | u16 | minCellVoltage_mV |
+| 23 | u16 | maxCellVoltage_mV |
+| 25 | u16 | averageCellVoltage_mV |
+| 27 | u16 | deltaCellVoltage_mV |
+| 29 | i16 | temperature0_C |
+| 31 | i16 | temperature1_C |
+| 33 | u32 | chargeThroughput_mAh |
+| 37 | u32 | dischargeThroughput_mAh |
+| 41 | u32 | equivalentCycle_milliCycles |
+| 45 | u8 | fetBitmap |
+| 46 | u8 | balanceRequired |
+| 47 | u16 | balanceMask |
+| 49 | u32 | alertCounter |
+| 53 | u16 | circleCounter |
 
 State values:
 

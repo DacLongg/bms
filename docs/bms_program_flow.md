@@ -51,7 +51,7 @@ Cac cau hinh chinh:
 - Cell mapping 10S: `BMS_BQ_VCELL_MODE_10S = 0xAAAF`.
 - Enable protection group A/B/C cua BQ.
 - Cau hinh FET options, predischarge timeout va stop delta.
-- Cau hinh TS1/TS2 la thermistor theo mach nguyen ly.
+- Cau hinh TS1/TS3 la thermistor theo mach nguyen ly hien tai.
 - Cau hinh over-voltage cell: `BMS_CELL_OV_CUTOFF_MV = 4150 mV`.
 - Cau hinh under-voltage cell: `BMS_CELL_UV_CUTOFF_MV = 3500 mV`.
 - Cau hinh qua nhiet sac: `BMS_CHARGE_OT_CUTOFF_C = 45 C`.
@@ -84,10 +84,11 @@ Moi lan `BMS_Update()` chay theo thu tu co dinh:
 `BMS_ReadMeasurements()` doc cac du lieu:
 
 - `cellVoltages[10]`: dien ap tung cell theo mapping 10S cua pack.
-- `stackVoltage`: dien ap pack/stack.
+- `stackVoltage`: dien ap stack/top-of-stack doc tu BQ.
+- `packVoltage`: dien ap tai chan PACK doc tu BQ.
 - `current_mA`: dong hien tai tu BQ.
 - `temperature[0]`: TS1.
-- `temperature[1]`: TS2.
+- `temperature[1]`: TS3.
 - `charging`, `discharging`, `fetsEnabled`: trang thai FET/BQ.
 
 Mapping cell theo mach:
@@ -337,7 +338,7 @@ Cac gia tri can xac nhan bang do thuc te:
 - `BMS_NOMINAL_CAPACITY_MAH`: dung luong danh dinh cua pack de tinh cycle.
 - `BMS_SHORT_CIRCUIT_MA`: nguong firmware cho short-circuit.
 - `BMS_BALANCE_MIN_CELL_MV`: nguong cho phep xa can bang.
-- TS1/TS2 co dung NTC 10 k va model `0x07` hay can custom thermistor coefficients.
+- TS1/TS3 co dung NTC 10 k va model `0x07` hay can custom thermistor coefficients.
 
 ## 17. Runtime Data For Debug
 
@@ -353,6 +354,7 @@ Cac truong nen quan sat khi debug:
 - `currentDirection`
 - `cellVoltages[]`
 - `stackVoltage`
+- `packVoltage`
 - `current_mA`
 - `temperature[]`
 - `faults`
