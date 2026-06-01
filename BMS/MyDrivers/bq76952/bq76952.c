@@ -83,7 +83,7 @@ static void bq76952_subCommand(unsigned int data);
 static void bq76952_subCommandWithU8Data(unsigned int command, byte data);
 static void bq76952_subCommandWithU16Data(unsigned int command, uint16_t data);
 static int16_t bq76952_subCommandResponseInt(byte offset);
-static byte bq76952_calculateChecksum(byte oldChecksum, byte data);
+static byte bq76952_calculateChecksum(const byte *data, uint16_t len);
 static byte bq76952_makeReg12Control(bool enable_reg1, bool enable_reg2);
 static void bq76952_applyReg12Control(bool enable_reg1, bool enable_reg2);
 static byte bq76952_make_pin_config(byte pin_fxn, bool active_low);
@@ -138,17 +138,12 @@ static void bq76952_subCommandWithU8Data(unsigned int command, byte data)
 {
     byte payload[3];
     byte footer[2];
-    byte checksum = 0U;
 
     payload[0] = LOW_BYTE(command);
     payload[1] = HIGH_BYTE(command);
     payload[2] = data;
 
-    for (byte i = 0U; i < 3U; ++i) {
-        checksum = bq76952_calculateChecksum(checksum, payload[i]);
-    }
-
-    footer[0] = checksum;
+    footer[0] = bq76952_calculateChecksum(payload, 3U);
     footer[1] = 0x05U;
 
     (void)bq76952_write_register(CMD_DIR_SUBCMD_LOW, payload, 3U);
@@ -160,18 +155,13 @@ static void bq76952_subCommandWithU16Data(unsigned int command, uint16_t data)
 {
     byte payload[4];
     byte footer[2];
-    byte checksum = 0U;
 
     payload[0] = LOW_BYTE(command);
     payload[1] = HIGH_BYTE(command);
     payload[2] = LOW_BYTE(data);
     payload[3] = HIGH_BYTE(data);
 
-    for (byte i = 0U; i < 4U; ++i) {
-        checksum = bq76952_calculateChecksum(checksum, payload[i]);
-    }
-
-    footer[0] = checksum;
+    footer[0] = bq76952_calculateChecksum(payload, 4U);
     footer[1] = 0x06U;
 
     (void)bq76952_write_register(CMD_DIR_SUBCMD_LOW, payload, 4U);
@@ -204,18 +194,20 @@ void bq76952_exitConfigUpdate(void)
     HAL_Delay(1U);
 }
 
-/* Checksum của BQ76952 là phép cộng dồn rồi đảo bit ở cuối.
- * Hàm này được gọi tuần tự cho từng byte trong payload.
- */
-static byte bq76952_calculateChecksum(byte oldChecksum, byte data)
+/* Checksum cua BQ76952 la one's-complement cua tong cac byte payload. */
+static byte bq76952_calculateChecksum(const byte *data, uint16_t len)
 {
-    if (oldChecksum == 0U) {
-        oldChecksum = data;
-    } else {
-        oldChecksum = (byte)((~oldChecksum) + data);
+    byte sum = 0U;
+
+    if (data == NULL) {
+        return 0xFFU;
     }
 
-    return (byte)(~oldChecksum);
+    for (uint16_t i = 0U; i < len; ++i) {
+        sum = (byte)(sum + data[i]);
+    }
+
+    return (byte)(~sum);
 }
 
 static byte bq76952_makeReg12Control(bool enable_reg1, bool enable_reg2)
@@ -294,7 +286,6 @@ static bool bq76952_waitConfigUpdateMode(bool expected, uint32_t timeout_ms)
 
 static bool bq76952_writeDataMemoryPayload(unsigned int addr, int16_t data, byte noOfBytes)
 {
-    byte checksum = 0U;
     byte payload[4];
     byte footer[2];
     uint16_t payload_len;
@@ -309,11 +300,7 @@ static bool bq76952_writeDataMemoryPayload(unsigned int addr, int16_t data, byte
     payload[2] = LOW_BYTE(data);
     payload[3] = HIGH_BYTE(data);
 
-    for (uint16_t i = 0U; i < payload_len; ++i) {
-        checksum = bq76952_calculateChecksum(checksum, payload[i]);
-    }
-
-    footer[0] = checksum;
+    footer[0] = bq76952_calculateChecksum(payload, payload_len);
     footer[1] = (byte)(payload_len + 2U);
 
     return bq76952_write_register(CMD_DIR_SUBCMD_LOW, payload, payload_len) &&
