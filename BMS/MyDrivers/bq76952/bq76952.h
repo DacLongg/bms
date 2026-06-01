@@ -41,6 +41,18 @@ typedef enum {
     ON
 } bq76952_fet_state_t;
 
+typedef struct {
+    bool attempted;
+    bool i2cOk;
+    bool configUpdateOk;
+    bool readbackOk;
+    bool verified;
+    unsigned int addr;
+    uint16_t expected;
+    uint16_t actual;
+    byte size;
+} bq76952_write_verify_t;
+
 /* Mức ngưỡng SCD (Short Circuit in Discharge) dạng mã hóa theo datasheet.
  * Giá trị enum không phải đơn vị mA trực tiếp, mà là mã ghi vào data memory.
  * Hậu tố số thể hiện mức ngưỡng tương ứng theo mV trên shunt/điện áp sense của BQ76952.
@@ -380,6 +392,8 @@ unsigned int bq76952_getAlertStatusRegister(void);
 byte bq76952_HandleAlarm(void);
 /* Đọc battery status và giải mã ra bitfield. */
 bq76952_battery_status_t bq76952_getBatteryStatusRegister(void);
+/* Lay ket qua verify cua lan ghi data memory gan nhat. */
+bool bq76952_getLastWriteVerify(bq76952_write_verify_t *status);
 /* Đọc trực tiếp data memory tại địa chỉ addr với kích thước 1 hoặc 2 byte. */
 unsigned int bq76952_readDataMemory(unsigned int addr, int size);
 /* Hàm service đơn giản cho alarm, hiện tại chỉ dùng để clear/read trạng thái. */

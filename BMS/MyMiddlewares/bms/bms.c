@@ -260,6 +260,30 @@ static void BMS_ConfigureMonitor(void)
     bq76952_setCellInterconnectResistances();
     bq76952_setEnableTS1();
     bq76952_setEnableTS3();
+#if BMS_DEBUG_LOG_ENABLE
+    {
+        bq76952_write_verify_t verify;
+        uint16_t ts1_cfg = (uint16_t)bq76952_readDataMemory(TS1_CONFIG, 1);
+        uint16_t ts3_cfg = (uint16_t)bq76952_readDataMemory(TS3_CONFIG, 1);
+
+        if (bq76952_getLastWriteVerify(&verify)) {
+            if (verify.verified) {
+                BMS_LOG_INFO("bq write ok addr=0x%04lx val=0x%04x",
+                             (unsigned long)verify.addr,
+                             verify.expected);
+            } else {
+                BMS_LOG_ERROR("bq write fail addr=0x%04lx exp=0x%04x got=0x%04x i2c=%u cfg=%u rd=%u",
+                              (unsigned long)verify.addr,
+                              verify.expected,
+                              verify.actual,
+                              verify.i2cOk ? 1U : 0U,
+                              verify.configUpdateOk ? 1U : 0U,
+                              verify.readbackOk ? 1U : 0U);
+            }
+        }
+        BMS_LOG_INFO("bq ts cfg ts1=0x%02x ts3=0x%02x", ts1_cfg, ts3_cfg);
+    }
+#endif
     bq76952_setAlertPinConfig();
     bq76952_setDFETOFFPinConfig(true, false);
     bq76952_setDCHGPinConfig(false);

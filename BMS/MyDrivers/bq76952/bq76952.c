@@ -61,6 +61,7 @@
     ((byte)((((reg2v) & 0x07U) << 5U) | ((reg2_en) ? 0x10U : 0x00U) | \
             (((reg1v) & 0x07U) << 1U) | ((reg1_en) ? 0x01U : 0x00U)))
 #define BQ_READ_STATUS_BIT(value, bit) (((value) >> (bit)) & 0x01U)
+#define BQ_CONFIG_UPDATE_TIMEOUT_MS 100U
 
 
 static bq76952_protection_t     g_protection_status;
@@ -69,6 +70,7 @@ static uint16_t g_unseal_key_step_1;
 static uint16_t g_unseal_key_step_2;
 static uint16_t g_full_access_key_step_1;
 static uint16_t g_full_access_key_step_2;
+static bq76952_write_verify_t g_last_write_verify;
 /* Board 10S routes cells consecutively from VC0 to VC10. */
 // static const byte g_connected_cell_to_vc_bit[10] = {
 //     0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 9U
@@ -76,7 +78,6 @@ static uint16_t g_full_access_key_step_2;
 
 static bool bq76952_write_register(byte reg, const byte *data, uint16_t len);
 static bool bq76952_read_register(byte reg, byte *data, uint16_t len);
-static bool bq76952_read_raw(byte *data, uint16_t len);
 static unsigned int bq76952_directCommand(byte command);
 static void bq76952_subCommand(unsigned int data);
 static void bq76952_subCommandWithU8Data(unsigned int command, byte data);
@@ -86,8 +87,12 @@ static byte bq76952_calculateChecksum(byte oldChecksum, byte data);
 static byte bq76952_makeReg12Control(bool enable_reg1, bool enable_reg2);
 static void bq76952_applyReg12Control(bool enable_reg1, bool enable_reg2);
 static byte bq76952_make_pin_config(byte pin_fxn, bool active_low);
-static void bq76952_writeDataMemory(unsigned int addr, int16_t data, byte noOfBytes);
-static void bq76952_writeDataMemoryWithoutConfigUpdate(unsigned int addr, int16_t data, byte noOfBytes);
+static uint16_t bq76952_dataMemoryExpectedValue(int16_t data, byte noOfBytes);
+static bool bq76952_readDataMemoryBytes(unsigned int addr, byte *data, byte noOfBytes);
+static bool bq76952_waitConfigUpdateMode(bool expected, uint32_t timeout_ms);
+static bool bq76952_writeDataMemoryPayload(unsigned int addr, int16_t data, byte noOfBytes);
+static bool bq76952_writeDataMemory(unsigned int addr, int16_t data, byte noOfBytes);
+static bool bq76952_writeDataMemoryWithoutConfigUpdate(unsigned int addr, int16_t data, byte noOfBytes);
 
 /* Driver hiện tại dùng lớp I2C software riêng thay vì HAL I2C trực tiếp. */
 void bq76952_begin(void)
@@ -105,12 +110,6 @@ static bool bq76952_write_register(byte reg, const byte *data, uint16_t len)
 static bool bq76952_read_register(byte reg, byte *data, uint16_t len)
 {
     return I2C_Soft_ReadDataFromAddress(BQ_I2C_ADDR, reg, data, len) == E_OK;
-}
-
-/* Đọc thô từ bus sau khi đã gửi địa chỉ data memory/subcommand trước đó. */
-static bool bq76952_read_raw(byte *data, uint16_t len)
-{
-    return I2c_Soft_ReadData(BQ_I2C_ADDR, data, len) == E_OK;
 }
 
 /* Gửi direct command loại 2 byte rồi ghép little-endian thành unsigned int. */
@@ -248,58 +247,164 @@ static byte bq76952_make_pin_config(byte pin_fxn, bool active_low)
     return cfg;
 }
 
+static uint16_t bq76952_dataMemoryExpectedValue(int16_t data, byte noOfBytes)
+{
+    if (noOfBytes == 1U) {
+        return (uint16_t)LOW_BYTE(data);
+    }
+
+    return (uint16_t)data;
+}
+
+static bool bq76952_readDataMemoryBytes(unsigned int addr, byte *data, byte noOfBytes)
+{
+    byte request[2];
+
+    if ((data == NULL) || ((noOfBytes != 1U) && (noOfBytes != 2U))) {
+        return false;
+    }
+
+    request[0] = LOW_BYTE(addr);
+    request[1] = HIGH_BYTE(addr);
+    if (!bq76952_write_register(CMD_DIR_SUBCMD_LOW, request, 2U)) {
+        return false;
+    }
+
+    HAL_Delay(2U);
+    return bq76952_read_register(CMD_DIR_RESP_START, data, noOfBytes);
+}
+
+static bool bq76952_waitConfigUpdateMode(bool expected, uint32_t timeout_ms)
+{
+    uint32_t start = HAL_GetTick();
+
+    do {
+        bq76952_battery_status_t batt_status = bq76952_getBatteryStatusRegister();
+        bool in_config_update = batt_status.bits.CONFIG_UPDATE_MODE != 0U;
+
+        if (in_config_update == expected) {
+            return true;
+        }
+
+        HAL_Delay(1U);
+    } while ((HAL_GetTick() - start) < timeout_ms);
+
+    return false;
+}
+
+static bool bq76952_writeDataMemoryPayload(unsigned int addr, int16_t data, byte noOfBytes)
+{
+    byte checksum = 0U;
+    byte payload[4];
+    byte footer[2];
+    uint16_t payload_len;
+
+    if ((noOfBytes != 1U) && (noOfBytes != 2U)) {
+        return false;
+    }
+
+    payload_len = (noOfBytes == 1U) ? 3U : 4U;
+    payload[0] = LOW_BYTE(addr);
+    payload[1] = HIGH_BYTE(addr);
+    payload[2] = LOW_BYTE(data);
+    payload[3] = HIGH_BYTE(data);
+
+    for (uint16_t i = 0U; i < payload_len; ++i) {
+        checksum = bq76952_calculateChecksum(checksum, payload[i]);
+    }
+
+    footer[0] = checksum;
+    footer[1] = (byte)(payload_len + 2U);
+
+    return bq76952_write_register(CMD_DIR_SUBCMD_LOW, payload, payload_len) &&
+           bq76952_write_register(CMD_DIR_RESP_CHKSUM, footer, 2U);
+}
+
 /* Ghi một mục data memory.
  * noOfBytes = 1 hoặc 2, footer[1] là tổng độ dài khung theo giao thức BQ76952.
  * Hàm này tự vào/ra Config Update mode cho từng lần ghi.
  */
-static void bq76952_writeDataMemory(unsigned int addr, int16_t data, byte noOfBytes)
+static bool bq76952_writeDataMemory(unsigned int addr, int16_t data, byte noOfBytes)
 {
-    byte checksum = 0U;
-    byte payload[4];
-    byte footer[2];
-    uint16_t payload_len = (noOfBytes == 1U) ? 3U : 4U;
+    byte readback[2] = {0};
+    uint16_t actual = 0U;
+    uint16_t expected = bq76952_dataMemoryExpectedValue(data, noOfBytes);
 
-    checksum = bq76952_calculateChecksum(checksum, LOW_BYTE(addr));
-    checksum = bq76952_calculateChecksum(checksum, HIGH_BYTE(addr));
-    checksum = bq76952_calculateChecksum(checksum, LOW_BYTE(data));
-    checksum = bq76952_calculateChecksum(checksum, HIGH_BYTE(data));
+    g_last_write_verify = (bq76952_write_verify_t){
+        .attempted = true,
+        .i2cOk = false,
+        .configUpdateOk = false,
+        .readbackOk = false,
+        .verified = false,
+        .addr = addr,
+        .expected = expected,
+        .actual = 0U,
+        .size = noOfBytes
+    };
+
+    if ((noOfBytes != 1U) && (noOfBytes != 2U)) {
+        return false;
+    }
 
     bq76952_enterConfigUpdate();
-    payload[0] = LOW_BYTE(addr);
-    payload[1] = HIGH_BYTE(addr);
-    payload[2] = LOW_BYTE(data);
-    payload[3] = HIGH_BYTE(data);
-    footer[0] = checksum;
-    footer[1] = (noOfBytes == 1U) ? 0x05U : 0x06U;
-
-    (void)bq76952_write_register(CMD_DIR_SUBCMD_LOW, payload, payload_len);
-    (void)bq76952_write_register(CMD_DIR_RESP_CHKSUM, footer, 2U);
+    g_last_write_verify.configUpdateOk = bq76952_waitConfigUpdateMode(true, BQ_CONFIG_UPDATE_TIMEOUT_MS);
+    if (g_last_write_verify.configUpdateOk) {
+        g_last_write_verify.i2cOk = bq76952_writeDataMemoryPayload(addr, data, noOfBytes);
+        if (g_last_write_verify.i2cOk) {
+            HAL_Delay(2U);
+            g_last_write_verify.readbackOk = bq76952_readDataMemoryBytes(addr, readback, noOfBytes);
+            if (g_last_write_verify.readbackOk) {
+                actual = (noOfBytes == 1U) ?
+                         (uint16_t)readback[0] :
+                         (uint16_t)(((uint16_t)readback[1] << 8) | readback[0]);
+                g_last_write_verify.actual = actual;
+                g_last_write_verify.verified = (actual == expected);
+            }
+        }
+    }
 
     bq76952_exitConfigUpdate();
+    (void)bq76952_waitConfigUpdateMode(false, BQ_CONFIG_UPDATE_TIMEOUT_MS);
+    return g_last_write_verify.verified;
 }
 
 /* Giống hàm trên nhưng dùng khi caller đã xử lý mode hoặc cần ghi nhanh nhiều lệnh liên tiếp. */
-static void bq76952_writeDataMemoryWithoutConfigUpdate(unsigned int addr, int16_t data, byte noOfBytes)
+static bool bq76952_writeDataMemoryWithoutConfigUpdate(unsigned int addr, int16_t data, byte noOfBytes)
 {
-    byte checksum = 0U;
-    byte payload[4];
-    byte footer[2];
-    uint16_t payload_len = (noOfBytes == 1U) ? 3U : 4U;
+    byte readback[2] = {0};
+    uint16_t actual = 0U;
+    uint16_t expected = bq76952_dataMemoryExpectedValue(data, noOfBytes);
 
-    checksum = bq76952_calculateChecksum(checksum, LOW_BYTE(addr));
-    checksum = bq76952_calculateChecksum(checksum, HIGH_BYTE(addr));
-    checksum = bq76952_calculateChecksum(checksum, LOW_BYTE(data));
-    checksum = bq76952_calculateChecksum(checksum, HIGH_BYTE(data));
+    g_last_write_verify = (bq76952_write_verify_t){
+        .attempted = true,
+        .i2cOk = false,
+        .configUpdateOk = true,
+        .readbackOk = false,
+        .verified = false,
+        .addr = addr,
+        .expected = expected,
+        .actual = 0U,
+        .size = noOfBytes
+    };
 
-    payload[0] = LOW_BYTE(addr);
-    payload[1] = HIGH_BYTE(addr);
-    payload[2] = LOW_BYTE(data);
-    payload[3] = HIGH_BYTE(data);
-    footer[0] = checksum;
-    footer[1] = (noOfBytes == 1U) ? 0x05U : 0x06U;
+    if ((noOfBytes != 1U) && (noOfBytes != 2U)) {
+        return false;
+    }
 
-    (void)bq76952_write_register(CMD_DIR_SUBCMD_LOW, payload, payload_len);
-    (void)bq76952_write_register(CMD_DIR_RESP_CHKSUM, footer, 2U);
+    g_last_write_verify.i2cOk = bq76952_writeDataMemoryPayload(addr, data, noOfBytes);
+    if (g_last_write_verify.i2cOk) {
+        HAL_Delay(2U);
+        g_last_write_verify.readbackOk = bq76952_readDataMemoryBytes(addr, readback, noOfBytes);
+        if (g_last_write_verify.readbackOk) {
+            actual = (noOfBytes == 1U) ?
+                     (uint16_t)readback[0] :
+                     (uint16_t)(((uint16_t)readback[1] << 8) | readback[0]);
+            g_last_write_verify.actual = actual;
+            g_last_write_verify.verified = (actual == expected);
+        }
+    }
+
+    return g_last_write_verify.verified;
 }
 
 /* Đọc 1 hoặc 2 byte data memory tại địa chỉ addr.
@@ -307,17 +412,9 @@ static void bq76952_writeDataMemoryWithoutConfigUpdate(unsigned int addr, int16_
  */
 unsigned int bq76952_readDataMemory(unsigned int addr, int size)
 {
-    byte request[2];
     byte data[2] = {0};
 
-    request[0] = LOW_BYTE(addr);
-    request[1] = HIGH_BYTE(addr);
-    if (!bq76952_write_register(CMD_DIR_SUBCMD_LOW, request, 2U)) {
-        return 0U;
-    }
-
-    HAL_Delay(2U);
-    if (!bq76952_read_raw(data, (uint16_t)size)) {
+    if (!bq76952_readDataMemoryBytes(addr, data, (byte)size)) {
         return 0U;
     }
 
@@ -326,6 +423,16 @@ unsigned int bq76952_readDataMemory(unsigned int addr, int size)
     }
 
     return (unsigned int)(((unsigned int)data[1] << 8) | data[0]);
+}
+
+bool bq76952_getLastWriteVerify(bq76952_write_verify_t *status)
+{
+    if (status == NULL) {
+        return false;
+    }
+
+    *status = g_last_write_verify;
+    return g_last_write_verify.attempted;
 }
 
 bool bq76952_isConnected(void)
