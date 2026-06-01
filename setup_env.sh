@@ -79,6 +79,17 @@ check_tool() {
     return 1
 }
 
+check_optional_tool() {
+    local cmd="$1"
+    local label="${2:-$1}"
+
+    if have_cmd "$cmd"; then
+        printf '[OK]   %-28s %s\n' "$label" "$(cmd_path "$cmd")"
+    else
+        printf '[SKIP] %-28s optional; OpenOCD flash/debug is supported\n' "$label"
+    fi
+}
+
 print_status() {
     local failed=0
 
@@ -89,7 +100,7 @@ print_status() {
     check_tool arm-none-eabi-size "ARM size" || failed=1
     check_tool arm-none-eabi-objdump "ARM objdump" || failed=1
     check_tool openocd "OpenOCD" || failed=1
-    check_tool st-flash "ST-Link st-flash" || failed=1
+    check_optional_tool st-flash "ST-Link st-flash"
 
     if have_cmd arm-none-eabi-gdb; then
         printf '[OK]   %-28s %s\n' "ARM GDB" "$(cmd_path arm-none-eabi-gdb)"
@@ -113,8 +124,9 @@ install_packages() {
             gcc-arm-none-eabi \
             binutils-arm-none-eabi \
             gdb-multiarch \
-            openocd \
-            stlink-tools
+            openocd
+        run_as_root apt-get install -y stlink-tools || \
+            printf 'Warning: could not install optional stlink-tools; OpenOCD flash/debug is still supported.\n' >&2
         return
     fi
 
@@ -125,8 +137,9 @@ install_packages() {
             arm-none-eabi-binutils-cs \
             arm-none-eabi-newlib \
             gdb \
-            openocd \
-            stlink
+            openocd
+        run_as_root dnf install -y stlink || \
+            printf 'Warning: could not install optional stlink; OpenOCD flash/debug is still supported.\n' >&2
         return
     fi
 
@@ -137,8 +150,9 @@ install_packages() {
             arm-none-eabi-binutils \
             arm-none-eabi-newlib \
             arm-none-eabi-gdb \
-            openocd \
-            stlink
+            openocd
+        run_as_root pacman -Sy --needed stlink || \
+            printf 'Warning: could not install optional stlink; OpenOCD flash/debug is still supported.\n' >&2
         return
     fi
 
@@ -150,7 +164,7 @@ Install these manually, then re-run this script:
   binutils-arm-none-eabi
   gdb-multiarch or arm-none-eabi-gdb
   openocd
-  stlink-tools
+  stlink-tools (optional)
 MSG
     exit 1
 }
@@ -199,6 +213,173 @@ install_vscode_extensions() {
         printf 'Warning: failed to install ms-vscode.cpptools.\n' >&2
 }
 
+json_escape() {
+    printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+configure_vscode_workspace() {
+    log "Configuring VS Code workspace for Linux"
+
+    local vscode_dir="$SCRIPT_DIR/.vscode"
+    local gdb_path=""
+    local objdump_path=""
+    local openocd_path=""
+    local gdb_json=""
+    local objdump_json=""
+    local openocd_json=""
+
+    mkdir -p "$vscode_dir"
+
+    if have_cmd gdb-multiarch; then
+        gdb_path="$(cmd_path gdb-multiarch)"
+    elif have_cmd arm-none-eabi-gdb; then
+        gdb_path="$(cmd_path arm-none-eabi-gdb)"
+    else
+        gdb_path="/usr/bin/gdb-multiarch"
+    fi
+
+    objdump_path="$(cmd_path arm-none-eabi-objdump)"
+    openocd_path="$(cmd_path openocd)"
+
+    gdb_json="$(json_escape "${gdb_path:-/usr/bin/gdb-multiarch}")"
+    objdump_json="$(json_escape "${objdump_path:-/usr/bin/arm-none-eabi-objdump}")"
+    openocd_json="$(json_escape "${openocd_path:-openocd}")"
+
+    cat > "$vscode_dir/launch.json" <<EOF
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug BMS (ST-Link)",
+      "cwd": "\${workspaceFolder}/BMS",
+      "executable": "\${workspaceFolder}/BMS/build/BMS.elf",
+      "request": "launch",
+      "type": "cortex-debug",
+      "servertype": "openocd",
+      "gdbPath": "$gdb_json",
+      "objdumpPath": "$objdump_json",
+      "configFiles": [
+        "interface/stlink.cfg",
+        "target/stm32l0.cfg"
+      ],
+      "device": "STM32L010C6Tx",
+      "runToEntryPoint": "main",
+      "preLaunchTask": "Rebuild BMS",
+      "windows": {
+        "gdbPath": "arm-none-eabi-gdb.exe",
+        "objdumpPath": "arm-none-eabi-objdump.exe",
+        "serverpath": "openocd.exe"
+      }
+    }
+  ]
+}
+EOF
+
+    cat > "$vscode_dir/tasks.json" <<'EOF'
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build BMS",
+      "type": "shell",
+      "command": "make",
+      "args": [
+        "-C",
+        "BMS",
+        "all"
+      ],
+      "windows": {
+        "command": "${workspaceFolder}\\build.bat",
+        "args": [
+          "all"
+        ]
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": [
+        "$gcc"
+      ]
+    },
+    {
+      "label": "Build BMS UART Protocol",
+      "type": "shell",
+      "command": "make",
+      "args": [
+        "-C",
+        "BMS",
+        "all",
+        "USER_DEFS=-DBMS_UART_PROTOCOL_ENABLE=1"
+      ],
+      "windows": {
+        "command": "${workspaceFolder}\\build.bat",
+        "args": [
+          "all",
+          "USER_DEFS=-DBMS_UART_PROTOCOL_ENABLE=1"
+        ]
+      },
+      "problemMatcher": [
+        "$gcc"
+      ]
+    },
+    {
+      "label": "Rebuild BMS",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "Clean BMS",
+        "Build BMS"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "Clean BMS",
+      "type": "shell",
+      "command": "make",
+      "args": [
+        "-C",
+        "BMS",
+        "clean"
+      ],
+      "windows": {
+        "command": "${workspaceFolder}\\build.bat",
+        "args": [
+          "clean"
+        ]
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Flash BMS (ST-Link)",
+      "type": "shell",
+      "command": "make",
+      "args": [
+        "-C",
+        "BMS",
+        "flash-stlink"
+      ],
+      "windows": {
+        "command": "${workspaceFolder}\\build.bat",
+        "args": [
+          "flash"
+        ]
+      },
+      "problemMatcher": []
+    }
+  ]
+}
+EOF
+
+    cat > "$vscode_dir/extensions.json" <<'EOF'
+{
+  "recommendations": [
+    "marus25.cortex-debug",
+    "ms-vscode.cpptools"
+  ]
+}
+EOF
+}
+
 build_project() {
     if [[ "$RUN_BUILD" -ne 1 ]]; then
         return
@@ -222,10 +403,11 @@ MSG
     exit 1
 fi
 
+configure_vscode_workspace
 install_vscode_extensions
 build_project
 
 log "Environment setup completed"
 printf 'You can build with: make -C BMS all\n'
-printf 'You can flash with: make -C BMS flash-stlink\n'
+printf 'You can flash with: make -C BMS flash\n'
 printf 'For OpenOCD debug server: make -C BMS debug-server\n'

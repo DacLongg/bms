@@ -70,14 +70,16 @@ if errorlevel 1 (
 )
 
 call :InstallVSCodeExtensions
+call :ConfigureVSCodeWorkspace
+if errorlevel 1 exit /b 1
 if "%RUN_BUILD%"=="1" call :BuildProject
 if errorlevel 1 exit /b 1
 
 echo.
-echo Environment setup completed.
-echo Build: make -C BMS all
-echo Flash: make -C BMS flash-stlink
-echo Debug server: make -C BMS debug-server
+    echo Environment setup completed.
+    echo Build: make -C BMS all
+    echo Flash: make -C BMS flash
+    echo Debug server: make -C BMS debug-server
 exit /b 0
 
 :PrintStatus
@@ -91,7 +93,7 @@ call :CheckTool arm-none-eabi-size.exe "ARM size"
 call :CheckTool arm-none-eabi-objdump.exe "ARM objdump"
 call :CheckTool arm-none-eabi-gdb.exe "ARM GDB"
 call :CheckTool openocd.exe "OpenOCD"
-call :CheckTool st-flash.exe "ST-Link st-flash"
+call :CheckOptionalTool st-flash.exe "ST-Link st-flash"
 call :FindBash
 if errorlevel 1 (
     echo [MISS] Git Bash/coreutils
@@ -114,6 +116,26 @@ if errorlevel 1 (
 )
 goto :eof
 
+:FindToolPath
+set "%~2="
+for /f "delims=" %%P in ('where "%~1" 2^>nul') do (
+    set "%~2=%%P"
+    goto :eof
+)
+exit /b 1
+
+:CheckOptionalTool
+where "%~1" >nul 2>nul
+if errorlevel 1 (
+    echo [SKIP] %~2 ^(optional; OpenOCD flash/debug is supported^)
+) else (
+    for /f "delims=" %%P in ('where "%~1" 2^>nul') do (
+        echo [OK]   %~2 %%P
+        goto :eof
+    )
+)
+goto :eof
+
 :RequireAdmin
 net session >nul 2>nul
 if not errorlevel 1 exit /b 0
@@ -121,7 +143,15 @@ if not errorlevel 1 exit /b 0
 echo.
 echo Administrator permission is required to install missing tools.
 echo Requesting elevation...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -ArgumentList '%*' -Verb RunAs"
+if "%~1"=="" (
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
+) else (
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -ArgumentList '%*' -Verb RunAs"
+)
+if errorlevel 1 (
+    echo Failed to request elevation.
+    exit /b 1
+)
 exit /b 100
 
 :EnsureChocolatey
@@ -145,7 +175,6 @@ call :ChocoInstall git
 call :ChocoInstall make
 call :ChocoInstall gcc-arm-embedded
 call :ChocoInstall openocd
-call :ChocoInstall stlink
 exit /b 0
 
 :ChocoInstall
@@ -187,7 +216,7 @@ exit /b 0
 :AddPath
 if "%~1"=="" exit /b 0
 if not exist "%~1" exit /b 0
-echo ;!PATH!; | find /I ";%~1;" >nul
+echo ;!PATH!; | "%SystemRoot%\System32\find.exe" /I ";%~1;" >nul
 if errorlevel 1 set "PATH=%~1;!PATH!"
 exit /b 0
 
@@ -225,6 +254,162 @@ echo.
 echo ==^> Installing VS Code extensions
 code --install-extension marus25.cortex-debug --force
 code --install-extension ms-vscode.cpptools --force
+exit /b 0
+
+:ConfigureVSCodeWorkspace
+echo.
+echo ==^> Configuring VS Code workspace for Windows
+
+set "VSCODE_DIR=%SCRIPT_DIR%.vscode"
+if not exist "%VSCODE_DIR%" mkdir "%VSCODE_DIR%"
+
+call :FindToolPath arm-none-eabi-gdb.exe GDB_EXE
+if not defined GDB_EXE set "GDB_EXE=arm-none-eabi-gdb.exe"
+call :FindToolPath arm-none-eabi-objdump.exe OBJDUMP_EXE
+if not defined OBJDUMP_EXE set "OBJDUMP_EXE=arm-none-eabi-objdump.exe"
+call :FindToolPath openocd.exe OPENOCD_EXE
+if not defined OPENOCD_EXE set "OPENOCD_EXE=openocd.exe"
+
+set "GDB_JSON=!GDB_EXE:\=/!"
+set "OBJDUMP_JSON=!OBJDUMP_EXE:\=/!"
+set "OPENOCD_JSON=!OPENOCD_EXE:\=/!"
+
+> "%VSCODE_DIR%\launch.json" (
+    echo {
+    echo   "version": "0.2.0",
+    echo   "configurations": [
+    echo     {
+    echo       "name": "Debug BMS (ST-Link)",
+    echo       "cwd": "${workspaceFolder}/BMS",
+    echo       "executable": "${workspaceFolder}/BMS/build/BMS.elf",
+    echo       "request": "launch",
+    echo       "type": "cortex-debug",
+    echo       "servertype": "openocd",
+    echo       "gdbPath": "/usr/bin/gdb-multiarch",
+    echo       "objdumpPath": "/usr/bin/arm-none-eabi-objdump",
+    echo       "configFiles": [
+    echo         "interface/stlink.cfg",
+    echo         "target/stm32l0.cfg"
+    echo       ],
+    echo       "device": "STM32L010C6Tx",
+    echo       "runToEntryPoint": "main",
+    echo       "preLaunchTask": "Rebuild BMS",
+    echo       "windows": {
+    echo         "gdbPath": "!GDB_JSON!",
+    echo         "objdumpPath": "!OBJDUMP_JSON!",
+    echo         "serverpath": "!OPENOCD_JSON!"
+    echo       }
+    echo     }
+    echo   ]
+    echo }
+)
+if errorlevel 1 exit /b 1
+
+> "%VSCODE_DIR%\tasks.json" (
+    echo {
+    echo   "version": "2.0.0",
+    echo   "tasks": [
+    echo     {
+    echo       "label": "Build BMS",
+    echo       "type": "shell",
+    echo       "command": "make",
+    echo       "args": [
+    echo         "-C",
+    echo         "BMS",
+    echo         "all"
+    echo       ],
+    echo       "windows": {
+    echo         "command": "${workspaceFolder}\\build.bat",
+    echo         "args": [
+    echo           "all"
+    echo         ]
+    echo       },
+    echo       "group": {
+    echo         "kind": "build",
+    echo         "isDefault": true
+    echo       },
+    echo       "problemMatcher": [
+    echo         "$gcc"
+    echo       ]
+    echo     },
+    echo     {
+    echo       "label": "Build BMS UART Protocol",
+    echo       "type": "shell",
+    echo       "command": "make",
+    echo       "args": [
+    echo         "-C",
+    echo         "BMS",
+    echo         "all",
+    echo         "USER_DEFS=-DBMS_UART_PROTOCOL_ENABLE=1"
+    echo       ],
+    echo       "windows": {
+    echo         "command": "${workspaceFolder}\\build.bat",
+    echo         "args": [
+    echo           "all",
+    echo           "USER_DEFS=-DBMS_UART_PROTOCOL_ENABLE=1"
+    echo         ]
+    echo       },
+    echo       "problemMatcher": [
+    echo         "$gcc"
+    echo       ]
+    echo     },
+    echo     {
+    echo       "label": "Rebuild BMS",
+    echo       "dependsOrder": "sequence",
+    echo       "dependsOn": [
+    echo         "Clean BMS",
+    echo         "Build BMS"
+    echo       ],
+    echo       "problemMatcher": []
+    echo     },
+    echo     {
+    echo       "label": "Clean BMS",
+    echo       "type": "shell",
+    echo       "command": "make",
+    echo       "args": [
+    echo         "-C",
+    echo         "BMS",
+    echo         "clean"
+    echo       ],
+    echo       "windows": {
+    echo         "command": "${workspaceFolder}\\build.bat",
+    echo         "args": [
+    echo           "clean"
+    echo         ]
+    echo       },
+    echo       "problemMatcher": []
+    echo     },
+    echo     {
+    echo       "label": "Flash BMS (ST-Link)",
+    echo       "type": "shell",
+    echo       "command": "make",
+    echo       "args": [
+    echo         "-C",
+    echo         "BMS",
+    echo         "flash-stlink"
+    echo       ],
+    echo       "windows": {
+    echo         "command": "${workspaceFolder}\\build.bat",
+    echo         "args": [
+    echo           "flash"
+    echo         ]
+    echo       },
+    echo       "problemMatcher": []
+    echo     }
+    echo   ]
+    echo }
+)
+if errorlevel 1 exit /b 1
+
+> "%VSCODE_DIR%\extensions.json" (
+    echo {
+    echo   "recommendations": [
+    echo     "marus25.cortex-debug",
+    echo     "ms-vscode.cpptools"
+    echo   ]
+    echo }
+)
+if errorlevel 1 exit /b 1
 exit /b 0
 
 :BuildProject

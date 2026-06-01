@@ -16,7 +16,12 @@
       ],
       "device": "STM32L010C6Tx",
       "runToEntryPoint": "main",
-      "preLaunchTask": "Rebuild BMS"
+      "preLaunchTask": "Rebuild BMS",
+      "windows": {
+        "gdbPath": "C:/ProgramData/chocolatey/bin/arm-none-eabi-gdb.exe",
+        "objdumpPath": "C:/ProgramData/chocolatey/bin/arm-none-eabi-objdump.exe",
+        "serverpath": "C:/ProgramData/chocolatey/bin/openocd.exe"
+      }
     }
   ]
 }

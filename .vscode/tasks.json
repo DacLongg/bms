@@ -10,6 +10,12 @@
         "BMS",
         "all"
       ],
+      "windows": {
+        "command": "${workspaceFolder}\\build.bat",
+        "args": [
+          "all"
+        ]
+      },
       "group": {
         "kind": "build",
         "isDefault": true
@@ -28,6 +34,13 @@
         "all",
         "USER_DEFS=-DBMS_UART_PROTOCOL_ENABLE=1"
       ],
+      "windows": {
+        "command": "${workspaceFolder}\\build.bat",
+        "args": [
+          "all",
+          "USER_DEFS=-DBMS_UART_PROTOCOL_ENABLE=1"
+        ]
+      },
       "problemMatcher": [
         "$gcc"
       ]
@@ -50,6 +63,12 @@
         "BMS",
         "clean"
       ],
+      "windows": {
+        "command": "${workspaceFolder}\\build.bat",
+        "args": [
+          "clean"
+        ]
+      },
       "problemMatcher": []
     },
     {
@@ -61,6 +80,12 @@
         "BMS",
         "flash-stlink"
       ],
+      "windows": {
+        "command": "${workspaceFolder}\\build.bat",
+        "args": [
+          "flash"
+        ]
+      },
       "problemMatcher": []
     }
   ]

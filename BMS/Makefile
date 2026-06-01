@@ -234,7 +234,7 @@ $(BUILD_DIR)/%.bin: $(BUILD_DIR)/%.elf | $(BUILD_DIR)
 $(BUILD_DIR):
 	mkdir $@		
 
-.PHONY: all clean flash flash-stlink flash-openocd debug-server debug erase check-gdb check-openocd check-stflash
+.PHONY: all clean flash flash-auto flash-stlink flash-openocd debug-server debug erase check-gdb check-openocd check-stflash
 
 check-stflash:
 	@command -v $(ST_FLASH) >/dev/null 2>&1 || { echo "Missing $(ST_FLASH). Install stlink-tools."; exit 1; }
@@ -245,7 +245,19 @@ check-openocd:
 check-gdb:
 	@command -v $(GDB) >/dev/null 2>&1 || { echo "Missing $(GDB). Install gcc-arm-none-eabi or gdb-multiarch."; exit 1; }
 
-flash: flash-stlink
+flash: flash-auto
+
+flash-auto: $(BUILD_DIR)/$(TARGET).elf $(BUILD_DIR)/$(TARGET).bin
+	@if command -v $(ST_FLASH) >/dev/null 2>&1; then \
+		echo "Flashing with $(ST_FLASH)"; \
+		$(ST_FLASH) --reset write $(BUILD_DIR)/$(TARGET).bin $(FLASH_ADDR); \
+	elif command -v $(OPENOCD) >/dev/null 2>&1; then \
+		echo "Flashing with $(OPENOCD)"; \
+		$(OPENOCD) -f $(OPENOCD_INTERFACE) -f $(OPENOCD_TARGET) -c "program $(BUILD_DIR)/$(TARGET).elf verify reset exit"; \
+	else \
+		echo "Missing flash tool. Install stlink-tools or openocd."; \
+		exit 1; \
+	fi
 
 flash-stlink: $(BUILD_DIR)/$(TARGET).bin check-stflash
 	$(ST_FLASH) --reset write $(BUILD_DIR)/$(TARGET).bin $(FLASH_ADDR)
