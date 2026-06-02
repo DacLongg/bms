@@ -39,12 +39,13 @@ static void MainApp_LogBatteryInfo(const BMS_Tracking_t *tracking)
         return;
     }
 
-    BMS_LOG_INFO("bat c=%lu st=%s stack=%u pack=%u adc=%u cur=%ld t=%d/%d",
+    BMS_LOG_INFO("bat c=%lu st=%s pack=%u adcPack=%u adcRaw=%u adcPin=%u cur=%ld t=%d/%d",
                  (unsigned long)tracking->circle_counter,
                  BMS_StateName(tracking->state),
-                 tracking->stackVoltage,
                  tracking->packVoltage,
                  tracking->batAdcEstimatedPack_mV,
+                 tracking->batAdcRaw,
+                 tracking->batAdcPin_mV,
                  (long)tracking->current_mA,
                  (int)tracking->temperature[0],
                  (int)tracking->temperature[1]);

@@ -72,8 +72,8 @@ Current `protocolVersion` is `0x03`.
 | 7 | u8 | state |
 | 8 | u8 | currentDirection |
 | 9 | u16 | faultBitmap |
-| 11 | u16 | stackVoltage_mV |
-| 13 | u16 | packVoltage_mV |
+| 11 | u16 | reservedStackVoltage_mV, currently 0 |
+| 13 | u16 | packVoltage_mV, sum of cellVoltages |
 | 15 | u16 | batAdcEstimatedPack_mV |
 | 17 | i32 | current_mA |
 | 21 | u16 | minCellVoltage_mV |
@@ -201,8 +201,8 @@ writeResult:u8
 writeDataFailAddr:u16
 batteryStatusRaw:u16
 staticConfigSignature:u16
-stackVoltage_mV:u16
-packVoltage_mV:u16
+stackVoltage_mV:u16      // runtime tracking currently reports 0
+packVoltage_mV:u16       // runtime tracking uses sum of cell voltages
 internalTemp_C:i16
 reg0Config:u8
 reg12Control:u8

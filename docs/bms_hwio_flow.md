@@ -34,5 +34,5 @@
 
 ## 5) Lưu ý
 - `BAT_ADC` là ước lượng theo tỉ lệ cầu chia R86/R85 = 665k/13.3k, dùng cho giám sát nhanh.
-- Điện áp PACK chính trong `packVoltage` đọc từ direct command BQ; firmware cấu hình BQ trả user-volts theo centivolt rồi scale về mV để tránh tràn trên pack 10S.
+- Dien ap PACK chinh trong `packVoltage` duoc tinh bang tong 10 cell; `BAT_ADC` la kenh phu de doi chieu/hieu chinh.
 - Nếu đo thực tế lệch, cần hiệu chuẩn lại hệ số divider và `Vref` theo board thực.

@@ -98,8 +98,8 @@ Tài liệu này mô tả cách hoạt động của tất cả hàm trong file 
 2. Đọc mảng cell voltage (`bq76952_getOnlyConnectedCellVoltages`).
 3. Nếu cell voltage âm thì ép 0, ngược lại cast sang `uint16_t`.
 4. Đọc:
-- `stackVoltage`
-- `packVoltage`
+- `stackVoltage` tam thoi khong xu ly trong runtime tracking.
+- `packVoltage` duoc tinh bang tong `cellVoltages[]` trong `BMS_UpdateCellStatistics()`.
 - `current_mA`
 - `temperature[0] = TS1`, `temperature[1] = TS3`
 - trạng thái `charging`, `discharging`

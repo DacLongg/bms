@@ -86,8 +86,8 @@ Moi lan `BMS_Update()` chay theo thu tu co dinh:
 `BMS_ReadMeasurements()` doc cac du lieu:
 
 - `cellVoltages[10]`: dien ap tung cell theo mapping 10S cua pack.
-- `stackVoltage`: dien ap stack/top-of-stack doc tu BQ.
-- `packVoltage`: dien ap tai chan PACK doc tu BQ, raw BQ theo centivolt va firmware scale ve mV.
+- `stackVoltage`: tam thoi khong xu ly trong tracking runtime.
+- `packVoltage`: tong dien ap 10 cell, tinh bang tong `cellVoltages[]`.
 - `current_mA`: dong hien tai tu BQ.
 - `temperature[0]`: TS1.
 - `temperature[1]`: TS3.
@@ -358,8 +358,8 @@ Cac truong nen quan sat khi debug:
 - `state`
 - `currentDirection`
 - `cellVoltages[]`
-- `stackVoltage`
-- `packVoltage`
+- `stackVoltage` (reserved/runtime unused)
+- `packVoltage` (sum of cell voltages)
 - `current_mA`
 - `temperature[]`
 - `faults`

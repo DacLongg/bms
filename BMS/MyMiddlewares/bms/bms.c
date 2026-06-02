@@ -17,6 +17,11 @@
 #define BMS_BAT_ADC_COUNTS 4095UL
 #define BMS_BAT_ADC_DIVIDER_NUM 678300UL
 #define BMS_BAT_ADC_DIVIDER_DEN 13300UL
+/* Calibration for BAT_ADC divider tolerance.
+ * Latest log: cell-sum pack ~= 37985 mV while ADC estimate ~= 39780 mV.
+ */
+#define BMS_BAT_ADC_CAL_NUM 955UL
+#define BMS_BAT_ADC_CAL_DEN 1000UL
 
 static BMS_Tracking_t g_bms_tracking;
 static uint32_t g_last_update_tick;
@@ -396,6 +401,8 @@ static void BMS_UpdateBatteryAdc(BMS_Tracking_t *tracking, uint32_t now)
 {
     uint32_t pin_mv;
     uint32_t pack_mv;
+    uint64_t pack_num;
+    uint64_t pack_den;
 
     if (tracking == NULL) {
         return;
@@ -422,8 +429,19 @@ static void BMS_UpdateBatteryAdc(BMS_Tracking_t *tracking, uint32_t now)
     (void)HAL_ADC_Stop(&hadc);
     BMS_SetBatSenseEnable(false);
 
-    pin_mv = ((uint32_t)tracking->batAdcRaw * BMS_BAT_ADC_REF_MV) / BMS_BAT_ADC_COUNTS;
-    pack_mv = (pin_mv * BMS_BAT_ADC_DIVIDER_NUM) / BMS_BAT_ADC_DIVIDER_DEN;
+    pin_mv = (((uint32_t)tracking->batAdcRaw * BMS_BAT_ADC_REF_MV) +
+              (BMS_BAT_ADC_COUNTS / 2UL)) / BMS_BAT_ADC_COUNTS;
+    pack_num = (uint64_t)tracking->batAdcRaw *
+               BMS_BAT_ADC_REF_MV *
+               BMS_BAT_ADC_DIVIDER_NUM *
+               BMS_BAT_ADC_CAL_NUM;
+    pack_den = (uint64_t)BMS_BAT_ADC_COUNTS *
+               BMS_BAT_ADC_DIVIDER_DEN *
+               BMS_BAT_ADC_CAL_DEN;
+    pack_mv = (uint32_t)((pack_num + (pack_den / 2ULL)) / pack_den);
+    if (pack_mv > UINT16_MAX) {
+        pack_mv = UINT16_MAX;
+    }
 
     tracking->batAdcPin_mV = (uint16_t)pin_mv;
     tracking->batAdcEstimatedPack_mV = (uint16_t)pack_mv;
@@ -441,9 +459,8 @@ static void BMS_ReadMeasurements(BMS_Tracking_t *tracking)
     bq76952_getOnlyConnectedCellVoltages(tracking->cellVoltages);
 
 
-    tracking->stackVoltage = (uint16_t)bq76952_getStackVoltage();
-    tracking->packVoltage = (uint16_t)bq76952_getPackVoltage();
-    tracking->current_mA = (int32_t)bq76952_getCurrentAvg();
+    tracking->stackVoltage = 0U;
+    tracking->current_mA = (int32_t)bq76952_getCurrentNow();
     tracking->temperature[0] = (int16_t)bq76952_getThermistorTemp(TS1);
     tracking->temperature[1] = (int16_t)bq76952_getThermistorTemp(TS3);
     tracking->charging = bq76952_isCharging();
@@ -482,6 +499,7 @@ static void BMS_UpdateCellStatistics(BMS_Tracking_t *tracking)
     tracking->maxCellVoltage = max_voltage;
     tracking->averageCellVoltage = (uint16_t)(voltage_sum / BMS_NUMBER_OF_CELLS);
     tracking->deltaCellVoltage = tracking->maxCellVoltage - tracking->minCellVoltage;
+    tracking->packVoltage = (voltage_sum > UINT16_MAX) ? UINT16_MAX : (uint16_t)voltage_sum;
 }
 
 static void BMS_UpdateCurrentDirection(BMS_Tracking_t *tracking)
