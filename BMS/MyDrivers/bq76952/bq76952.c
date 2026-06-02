@@ -28,6 +28,7 @@
 
 #define CMD_DEVICE_NUMBER           0x0001U
 #define CMD_HW_VERSION              0x0003U
+#define CMD_STATIC_CFG_SIG          0x0005U
 #define CMD_COV_SNAPSHOT            0x0081U
 #define SUBCMD_CB_ACTIVE_CELLS      0x0083U
 #define SUBCMD_SLEEP_ENABLE         0x0099U
@@ -62,6 +63,9 @@
             (((reg1v) & 0x07U) << 1U) | ((reg1_en) ? 0x01U : 0x00U)))
 #define BQ_READ_STATUS_BIT(value, bit) (((value) >> (bit)) & 0x01U)
 #define BQ_CONFIG_UPDATE_TIMEOUT_MS 100U
+#define BQ_USER_CV_TO_MV            10U
+#define BQ_OTP_CHECK_WAIT_MS        1000U
+#define BQ_OTP_WRITE_WAIT_MS        1000U
 
 
 static bq76952_protection_t     g_protection_status;
@@ -87,12 +91,15 @@ static byte bq76952_calculateChecksum(const byte *data, uint16_t len);
 static byte bq76952_makeReg12Control(bool enable_reg1, bool enable_reg2);
 static void bq76952_applyReg12Control(bool enable_reg1, bool enable_reg2);
 static byte bq76952_make_pin_config(byte pin_fxn, bool active_low);
+static unsigned int bq76952_userVoltageCommandToMv(byte command);
 static uint16_t bq76952_dataMemoryExpectedValue(int16_t data, byte noOfBytes);
 static bool bq76952_readDataMemoryBytes(unsigned int addr, byte *data, byte noOfBytes);
 static bool bq76952_waitConfigUpdateMode(bool expected, uint32_t timeout_ms);
 static bool bq76952_writeDataMemoryPayload(unsigned int addr, int16_t data, byte noOfBytes);
 static bool bq76952_writeDataMemory(unsigned int addr, int16_t data, byte noOfBytes);
 static bool bq76952_writeDataMemoryWithoutConfigUpdate(unsigned int addr, int16_t data, byte noOfBytes);
+static void bq76952_fillOTPStatusSnapshot(bq76952_otp_status_t *status);
+static bool bq76952_otpResultIsOk(uint8_t result);
 
 /* Driver hiện tại dùng lớp I2C software riêng thay vì HAL I2C trực tiếp. */
 void bq76952_begin(void)
@@ -237,6 +244,17 @@ static byte bq76952_make_pin_config(byte pin_fxn, bool active_low)
         cfg |= 0x80U;
     }
     return cfg;
+}
+
+static unsigned int bq76952_userVoltageCommandToMv(byte command)
+{
+    int16_t raw_user_voltage = (int16_t)bq76952_directCommand(command);
+
+    if (raw_user_voltage <= 0) {
+        return 0U;
+    }
+
+    return (unsigned int)raw_user_voltage * BQ_USER_CV_TO_MV;
 }
 
 static uint16_t bq76952_dataMemoryExpectedValue(int16_t data, byte noOfBytes)
@@ -519,12 +537,12 @@ bool bq76952_areFETs_Enabled(void)
 
 unsigned int bq76952_getStackVoltage(void)
 {
-    return bq76952_directCommand(CMD_READ_VOLTAGE_STACK);
+    return bq76952_userVoltageCommandToMv(CMD_READ_VOLTAGE_STACK);
 }
 
 unsigned int bq76952_getPackVoltage(void)
 {
-    return bq76952_directCommand(CMD_READ_VOLTAGE_PACK);
+    return bq76952_userVoltageCommandToMv(CMD_READ_VOLTAGE_PACK);
 }
 
 
@@ -538,10 +556,15 @@ unsigned int bq76952_getCOVSnapshot(byte cell)
 
 bool bq76952_is_OTP_already_programmed(void)
 {
-    byte reg0 = (byte)bq76952_readDataMemory(REG0_CONFIG, 1);
-    byte reg12 = (byte)bq76952_readDataMemory(REG12_CONTROL, 1);
+    bq76952_otp_status_t status;
 
-    return (reg0 != 0U) || (reg12 != 0U);
+    if (!bq76952_checkOTPWriteReady(&status)) {
+        return (status.checkResult & (BQ_OTP_RESULT_LOCK |
+                                      BQ_OTP_RESULT_NOSIG |
+                                      BQ_OTP_RESULT_NODATA)) != 0U;
+    }
+
+    return false;
 }
 
 bool bq76952_checkSecurityKeys(void)
@@ -567,10 +590,15 @@ bool bq76952_checkSecurityKeys(void)
            (g_full_access_key_step_2 == FULL_ACCESS_KEY_STEP_2);
 }
 
+unsigned int bq76952_getBatteryStatusRaw(void)
+{
+    return bq76952_directCommand(CMD_DIR_BATTERY_STATUS);
+}
+
 bq76952_battery_status_t bq76952_getBatteryStatusRegister(void)
 {
     bq76952_battery_status_t batt_stat = {0};
-    unsigned int regData = bq76952_directCommand(CMD_DIR_BATTERY_STATUS);
+    unsigned int regData = bq76952_getBatteryStatusRaw();
 
     batt_stat.bits.SLEEP_MODE = BQ_READ_STATUS_BIT(regData, 15U);
     batt_stat.bits.SHUTDOWN_PENDING = BQ_READ_STATUS_BIT(regData, 13U);
@@ -594,25 +622,31 @@ bool bq76952_Enter_FullAccessMode(void)
 {
     bq76952_battery_status_t batt_st;
 
-    /* Nếu key trong chip chưa khớp bộ key của thư viện thì ghi lại bộ key mặc định trước. */
-    if (!bq76952_checkSecurityKeys()) {
-        bq76952_writeDataMemoryWithoutConfigUpdate(0x925BU, FULL_ACCESS_KEY_STEP_1, 2U);
-        bq76952_writeDataMemoryWithoutConfigUpdate(0x925DU, FULL_ACCESS_KEY_STEP_2, 2U);
-        g_full_access_key_step_1 = FULL_ACCESS_KEY_STEP_1;
-        g_full_access_key_step_2 = FULL_ACCESS_KEY_STEP_2;
-    }
+    g_unseal_key_step_1 = UNSEAL_KEY_STEP_1;
+    g_unseal_key_step_2 = UNSEAL_KEY_STEP_2;
+    g_full_access_key_step_1 = FULL_ACCESS_KEY_STEP_1;
+    g_full_access_key_step_2 = FULL_ACCESS_KEY_STEP_2;
 
     batt_st = bq76952_getBatteryStatusRegister();
+    if (batt_st.bits.SECURITY_STATE == 1U) {
+        return true;
+    }
+
     if (batt_st.bits.SECURITY_STATE == 3U) {
         /* Sealed: cần unseal rồi mới vào full access. */
         bq76952_subCommand(g_unseal_key_step_1);
+        HAL_Delay(2U);
         bq76952_subCommand(g_unseal_key_step_2);
+        HAL_Delay(2U);
+        batt_st = bq76952_getBatteryStatusRegister();
+    }
+
+    if (batt_st.bits.SECURITY_STATE == 2U) {
+        /* Unsealed: gửi full-access key. */
         bq76952_subCommand(g_full_access_key_step_1);
+        HAL_Delay(2U);
         bq76952_subCommand(g_full_access_key_step_2);
-    } else if (batt_st.bits.SECURITY_STATE == 2U) {
-        /* Unsealed: chỉ cần gửi full-access key. */
-        bq76952_subCommand(g_full_access_key_step_1);
-        bq76952_subCommand(g_full_access_key_step_2);
+        HAL_Delay(2U);
     }
 
     batt_st = bq76952_getBatteryStatusRegister();
@@ -626,39 +660,155 @@ bool bq76952_configure_before_OTP_write(void)
     return true;
 }
 
-bool bq76952_program_OTP(void)
+static bool bq76952_otpResultIsOk(uint8_t result)
 {
-    byte otp_wr_check;
-    byte otp_write_response;
-    bq76952_battery_status_t batt_st;
+    return ((result & BQ_OTP_RESULT_OK) != 0U) &&
+           ((result & (BQ_OTP_RESULT_LOCK |
+                       BQ_OTP_RESULT_NOSIG |
+                       BQ_OTP_RESULT_NODATA |
+                       BQ_OTP_RESULT_HT |
+                       BQ_OTP_RESULT_LV |
+                       BQ_OTP_RESULT_HV)) == 0U);
+}
 
-    if (bq76952_is_OTP_already_programmed()) {
+static void bq76952_fillOTPStatusSnapshot(bq76952_otp_status_t *status)
+{
+    uint16_t battery_status_raw;
+
+    if (status == NULL) {
+        return;
+    }
+
+    battery_status_raw = (uint16_t)bq76952_getBatteryStatusRaw();
+    status->batteryStatusRaw = battery_status_raw;
+    status->securityState = (uint8_t)((battery_status_raw >> 8U) & 0x03U);
+    status->otpBlocked = BQ_READ_STATUS_BIT(battery_status_raw, 7U) != 0U;
+    status->otpPending = BQ_READ_STATUS_BIT(battery_status_raw, 6U) != 0U;
+    status->stackVoltage_mV = (uint16_t)bq76952_getStackVoltage();
+    status->packVoltage_mV = (uint16_t)bq76952_getPackVoltage();
+    status->internalTemp_C = (int16_t)bq76952_getInternalTemp();
+
+    bq76952_subCommand(CMD_STATIC_CFG_SIG);
+    HAL_Delay(1U);
+    status->staticConfigSignature = (uint16_t)bq76952_subCommandResponseInt(0U);
+
+    status->reg0Config = (uint8_t)bq76952_readDataMemory(REG0_CONFIG, 1);
+    status->reg12Control = (uint8_t)bq76952_readDataMemory(REG12_CONTROL, 1);
+    status->daConfig = (uint8_t)bq76952_readDataMemory(DA_CONFIGURATION, 1);
+    status->vcellMode = (uint16_t)bq76952_readDataMemory(VCELL_MODE, 2);
+    status->dchgPinConfig = (uint8_t)bq76952_readDataMemory(DCHG_PIN_CONFIG, 1);
+    status->ddsgPinConfig = (uint8_t)bq76952_readDataMemory(DDSG_PIN_CONFIG, 1);
+    status->dfetoffPinConfig = (uint8_t)bq76952_readDataMemory(DFETOFF_PIN_CONFIG, 1);
+}
+
+bool bq76952_readOTPStatus(bq76952_otp_status_t *status)
+{
+    if (status == NULL) {
+        return false;
+    }
+
+    *status = (bq76952_otp_status_t){0};
+    bq76952_fillOTPStatusSnapshot(status);
+    return true;
+}
+
+bool bq76952_checkOTPWriteReady(bq76952_otp_status_t *status)
+{
+    uint16_t check_battery_status_raw = 0U;
+    bool blocked_during_check = false;
+
+    if (status == NULL) {
+        return false;
+    }
+
+    *status = (bq76952_otp_status_t){0};
+    status->fullAccessOk = bq76952_Enter_FullAccessMode();
+    if (!status->fullAccessOk) {
+        bq76952_fillOTPStatusSnapshot(status);
         return false;
     }
 
     if (!bq76952_configure_before_OTP_write()) {
+        bq76952_fillOTPStatusSnapshot(status);
         return false;
     }
 
     bq76952_enterConfigUpdate();
-    bq76952_subCommand(SUBCMD_OTP_WR_CHECK);
-    HAL_Delay(1000U);
+    status->configUpdateOk = bq76952_waitConfigUpdateMode(true, BQ_CONFIG_UPDATE_TIMEOUT_MS);
+    if (status->configUpdateOk) {
+        bq76952_subCommand(SUBCMD_OTP_WR_CHECK);
+        HAL_Delay(BQ_OTP_CHECK_WAIT_MS);
+        status->checkResult = (uint8_t)bq76952_subCommandResponseInt(0U);
+        status->checkDataFailAddr = (uint16_t)bq76952_subCommandResponseInt(1U);
+        check_battery_status_raw = (uint16_t)bq76952_getBatteryStatusRaw();
+        blocked_during_check = BQ_READ_STATUS_BIT(check_battery_status_raw, 7U) != 0U;
+    }
+    bq76952_exitConfigUpdate();
+    (void)bq76952_waitConfigUpdateMode(false, BQ_CONFIG_UPDATE_TIMEOUT_MS);
+    bq76952_fillOTPStatusSnapshot(status);
+    status->otpBlocked = status->otpBlocked || blocked_during_check;
 
-    /* bit7 của otp_wr_check báo điều kiện ghi hợp lệ; battery status báo có bị block hay không. */
-    otp_wr_check = (byte)bq76952_subCommandResponseInt(0U);
-    batt_st = bq76952_getBatteryStatusRegister();
-    if (((otp_wr_check & 0x80U) == 0U) || batt_st.bits.WR_TO_OTP_BLOCKED) {
-        bq76952_exitConfigUpdate();
+    status->checkOk = status->configUpdateOk &&
+                      bq76952_otpResultIsOk(status->checkResult) &&
+                      !blocked_during_check;
+    return status->checkOk;
+}
+
+bool bq76952_program_OTP_with_status(bq76952_otp_status_t *status)
+{
+    bq76952_otp_status_t local_status;
+    bq76952_otp_status_t *result = (status != NULL) ? status : &local_status;
+    bool allow_write = false;
+
+    *result = (bq76952_otp_status_t){0};
+    result->fullAccessOk = bq76952_Enter_FullAccessMode();
+    if (!result->fullAccessOk) {
+        bq76952_fillOTPStatusSnapshot(result);
         return false;
     }
 
-    bq76952_subCommand(SUBCMD_OTP_WRITE);
-    otp_write_response = (byte)bq76952_subCommandResponseInt(0U);
-    HAL_Delay(10U);
-    bq76952_exitConfigUpdate();
+    if (!bq76952_configure_before_OTP_write()) {
+        bq76952_fillOTPStatusSnapshot(result);
+        return false;
+    }
 
-    /* 0x81 nghĩa là lệnh đã chấp nhận và hoàn tất thành công theo response bitmask hiện tại. */
-    return (otp_write_response & 0x81U) == 0x81U;
+    bq76952_enterConfigUpdate();
+    result->configUpdateOk = bq76952_waitConfigUpdateMode(true, BQ_CONFIG_UPDATE_TIMEOUT_MS);
+    if (result->configUpdateOk) {
+        uint16_t battery_status_raw;
+
+        bq76952_subCommand(SUBCMD_OTP_WR_CHECK);
+        HAL_Delay(BQ_OTP_CHECK_WAIT_MS);
+        result->checkResult = (uint8_t)bq76952_subCommandResponseInt(0U);
+        result->checkDataFailAddr = (uint16_t)bq76952_subCommandResponseInt(1U);
+        battery_status_raw = (uint16_t)bq76952_getBatteryStatusRaw();
+        allow_write = bq76952_otpResultIsOk(result->checkResult) &&
+                      (BQ_READ_STATUS_BIT(battery_status_raw, 7U) == 0U);
+
+        if (allow_write) {
+            bq76952_subCommand(SUBCMD_OTP_WRITE);
+            HAL_Delay(BQ_OTP_WRITE_WAIT_MS);
+            result->writeResult = (uint8_t)bq76952_subCommandResponseInt(0U);
+            result->writeDataFailAddr = (uint16_t)bq76952_subCommandResponseInt(1U);
+        }
+    }
+
+    bq76952_exitConfigUpdate();
+    (void)bq76952_waitConfigUpdateMode(false, BQ_CONFIG_UPDATE_TIMEOUT_MS);
+    bq76952_fillOTPStatusSnapshot(result);
+
+    result->checkOk = result->configUpdateOk &&
+                      bq76952_otpResultIsOk(result->checkResult) &&
+                      !result->otpBlocked;
+    result->writeOk = allow_write && bq76952_otpResultIsOk(result->writeResult);
+    return result->writeOk;
+}
+
+bool bq76952_program_OTP(void)
+{
+    bq76952_otp_status_t status;
+
+    return bq76952_program_OTP_with_status(&status);
 }
 
 float bq76952_getInternalTemp(void)
@@ -974,8 +1124,10 @@ void bq76952_resumeFromSleep(void)
 
 void bq76952_setDA_Config(void)
 {
-    /* 0x01 là preset DA configuration mà project này đang dùng. */
-    bq76952_writeDataMemory(DA_CONFIGURATION, 0x01, 1U);
+    /* USER_VOLTS_CV=1 để Stack/PACK/LD không tràn signed 16-bit trên pack 10S;
+     * USER_AMPS=1 giữ đơn vị dòng là mA.
+     */
+    bq76952_writeDataMemory(DA_CONFIGURATION, BQ_DA_CONFIG_DEFAULT, 1U);
 }
 
 void bq76952_setCurrentSenseCalibration(void)

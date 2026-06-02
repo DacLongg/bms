@@ -12,6 +12,10 @@
 #define BMS_UART_TX_TIMEOUT_MS                 50U
 #define BMS_UART_RX_BUFFER_SIZE                128U
 #define BMS_UART_TX_BUFFER_SIZE                (BMS_UART_MAX_PAYLOAD_SIZE + 6U)
+#define BMS_UART_OTP_WRITE_MAGIC0              0x4FU
+#define BMS_UART_OTP_WRITE_MAGIC1              0x54U
+#define BMS_UART_OTP_WRITE_MAGIC2              0x50U
+#define BMS_UART_OTP_WRITE_MAGIC3              0x21U
 
 typedef enum {
     BMS_UART_PARSE_SOF0 = 0,
@@ -63,9 +67,17 @@ static void bms_uart_handle_read_summary(uint8_t command, uint8_t length);
 static void bms_uart_handle_read_cells(uint8_t command, uint8_t length);
 static void bms_uart_handle_read_faults(uint8_t command, uint8_t length);
 static void bms_uart_handle_read_limits(uint8_t command, uint8_t length);
+static void bms_uart_handle_otp_check(uint8_t command, uint8_t length);
+static void bms_uart_handle_otp_write(uint8_t command,
+                                      const uint8_t *payload,
+                                      uint8_t length);
+static void bms_uart_handle_otp_read(uint8_t command, uint8_t length);
+static void bms_uart_send_otp_status(uint8_t command,
+                                     const bq76952_otp_status_t *status);
 static uint16_t bms_uart_fault_bitmap(const BMS_Tracking_t *tracking);
 static uint8_t bms_uart_fet_bitmap(const BMS_Tracking_t *tracking);
 static uint8_t bms_uart_gate_signal_bitmap(const BMS_Tracking_t *tracking);
+static uint16_t bms_uart_otp_flags(const bq76952_otp_status_t *status);
 static uint16_t bms_uart_crc16(const uint8_t *data, uint16_t length);
 static bool bms_uart_put_u8(uint8_t *payload, uint8_t *length, uint8_t value);
 static bool bms_uart_put_u16(uint8_t *payload, uint8_t *length, uint16_t value);
@@ -257,6 +269,18 @@ static void bms_uart_handle_frame(uint8_t command,
 
     case BMS_UART_CMD_READ_LIMITS:
         bms_uart_handle_read_limits(command, length);
+        break;
+
+    case BMS_UART_CMD_OTP_CHECK:
+        bms_uart_handle_otp_check(command, length);
+        break;
+
+    case BMS_UART_CMD_OTP_WRITE:
+        bms_uart_handle_otp_write(command, payload, length);
+        break;
+
+    case BMS_UART_CMD_OTP_READ:
+        bms_uart_handle_otp_read(command, length);
         break;
 
     default:
@@ -456,6 +480,92 @@ static void bms_uart_handle_read_limits(uint8_t command, uint8_t length)
     bms_uart_send_response(command, BMS_UART_STATUS_OK, payload, payload_len);
 }
 
+static void bms_uart_handle_otp_check(uint8_t command, uint8_t length)
+{
+    bq76952_otp_status_t otp_status;
+
+    if (length != 0U) {
+        bms_uart_send_status(command, BMS_UART_STATUS_BAD_LENGTH);
+        return;
+    }
+
+    (void)bq76952_checkOTPWriteReady(&otp_status);
+    bms_uart_send_otp_status(command, &otp_status);
+}
+
+static void bms_uart_handle_otp_write(uint8_t command,
+                                      const uint8_t *payload,
+                                      uint8_t length)
+{
+    bq76952_otp_status_t otp_status;
+
+    if (length != 4U) {
+        bms_uart_send_status(command, BMS_UART_STATUS_BAD_LENGTH);
+        return;
+    }
+    if ((payload == NULL) ||
+        (payload[0] != BMS_UART_OTP_WRITE_MAGIC0) ||
+        (payload[1] != BMS_UART_OTP_WRITE_MAGIC1) ||
+        (payload[2] != BMS_UART_OTP_WRITE_MAGIC2) ||
+        (payload[3] != BMS_UART_OTP_WRITE_MAGIC3)) {
+        bms_uart_send_status(command, BMS_UART_STATUS_BAD_PAYLOAD);
+        return;
+    }
+
+    (void)bq76952_program_OTP_with_status(&otp_status);
+    bms_uart_send_otp_status(command, &otp_status);
+}
+
+static void bms_uart_handle_otp_read(uint8_t command, uint8_t length)
+{
+    bq76952_otp_status_t otp_status;
+
+    if (length != 0U) {
+        bms_uart_send_status(command, BMS_UART_STATUS_BAD_LENGTH);
+        return;
+    }
+
+    if (!bq76952_readOTPStatus(&otp_status)) {
+        bms_uart_send_status(command, BMS_UART_STATUS_INTERNAL_ERROR);
+        return;
+    }
+
+    bms_uart_send_otp_status(command, &otp_status);
+}
+
+static void bms_uart_send_otp_status(uint8_t command,
+                                     const bq76952_otp_status_t *status)
+{
+    uint8_t payload[BMS_UART_MAX_PAYLOAD_SIZE];
+    uint8_t payload_len = 0U;
+
+    if (status == NULL) {
+        bms_uart_send_status(command, BMS_UART_STATUS_INTERNAL_ERROR);
+        return;
+    }
+
+    (void)bms_uart_put_u16(payload, &payload_len, bms_uart_otp_flags(status));
+    (void)bms_uart_put_u8(payload, &payload_len, status->securityState);
+    (void)bms_uart_put_u8(payload, &payload_len, status->checkResult);
+    (void)bms_uart_put_u16(payload, &payload_len, status->checkDataFailAddr);
+    (void)bms_uart_put_u8(payload, &payload_len, status->writeResult);
+    (void)bms_uart_put_u16(payload, &payload_len, status->writeDataFailAddr);
+    (void)bms_uart_put_u16(payload, &payload_len, status->batteryStatusRaw);
+    (void)bms_uart_put_u16(payload, &payload_len, status->staticConfigSignature);
+    (void)bms_uart_put_u16(payload, &payload_len, status->stackVoltage_mV);
+    (void)bms_uart_put_u16(payload, &payload_len, status->packVoltage_mV);
+    (void)bms_uart_put_i16(payload, &payload_len, status->internalTemp_C);
+    (void)bms_uart_put_u8(payload, &payload_len, status->reg0Config);
+    (void)bms_uart_put_u8(payload, &payload_len, status->reg12Control);
+    (void)bms_uart_put_u8(payload, &payload_len, status->daConfig);
+    (void)bms_uart_put_u16(payload, &payload_len, status->vcellMode);
+    (void)bms_uart_put_u8(payload, &payload_len, status->dchgPinConfig);
+    (void)bms_uart_put_u8(payload, &payload_len, status->ddsgPinConfig);
+    (void)bms_uart_put_u8(payload, &payload_len, status->dfetoffPinConfig);
+
+    bms_uart_send_response(command, BMS_UART_STATUS_OK, payload, payload_len);
+}
+
 static uint16_t bms_uart_fault_bitmap(const BMS_Tracking_t *tracking)
 {
     uint16_t bitmap = 0U;
@@ -507,6 +617,35 @@ static uint8_t bms_uart_gate_signal_bitmap(const BMS_Tracking_t *tracking)
     bitmap |= tracking->chargeGateFaultSignal ? (uint8_t)(1U << 0) : 0U;
     bitmap |= tracking->dischargeGateFaultSignal ? (uint8_t)(1U << 1) : 0U;
     return bitmap;
+}
+
+static uint16_t bms_uart_otp_flags(const bq76952_otp_status_t *status)
+{
+    uint16_t flags = 0U;
+
+    if (status == NULL) {
+        return 0U;
+    }
+
+    flags |= status->fullAccessOk ? (uint16_t)(1U << 0) : 0U;
+    flags |= status->configUpdateOk ? (uint16_t)(1U << 1) : 0U;
+    flags |= status->checkOk ? (uint16_t)(1U << 2) : 0U;
+    flags |= status->writeOk ? (uint16_t)(1U << 3) : 0U;
+    flags |= status->otpBlocked ? (uint16_t)(1U << 4) : 0U;
+    flags |= status->otpPending ? (uint16_t)(1U << 5) : 0U;
+    flags |= (status->dchgPinConfig == BQ_PIN_CONFIG_DCHG_ACTIVE_HIGH) ? (uint16_t)(1U << 6) : 0U;
+    flags |= (status->ddsgPinConfig == BQ_PIN_CONFIG_DDSG_ACTIVE_HIGH) ? (uint16_t)(1U << 7) : 0U;
+    flags |= ((status->daConfig & BQ_DA_CONFIG_USER_VOLTS_CV) != 0U) ? (uint16_t)(1U << 8) : 0U;
+    flags |= ((status->checkResult & BQ_OTP_RESULT_LOCK) != 0U) ? (uint16_t)(1U << 9) : 0U;
+    flags |= ((status->checkResult & BQ_OTP_RESULT_NOSIG) != 0U) ? (uint16_t)(1U << 10) : 0U;
+    flags |= ((status->checkResult & BQ_OTP_RESULT_NODATA) != 0U) ? (uint16_t)(1U << 11) : 0U;
+    flags |= ((status->checkResult & BQ_OTP_RESULT_HT) != 0U) ? (uint16_t)(1U << 12) : 0U;
+    flags |= ((status->checkResult & BQ_OTP_RESULT_LV) != 0U) ? (uint16_t)(1U << 13) : 0U;
+    flags |= ((status->checkResult & BQ_OTP_RESULT_HV) != 0U) ? (uint16_t)(1U << 14) : 0U;
+    flags |= ((status->writeResult != 0U) && ((status->writeResult & BQ_OTP_RESULT_OK) == 0U)) ?
+             (uint16_t)(1U << 15) : 0U;
+
+    return flags;
 }
 
 static uint16_t bms_uart_crc16(const uint8_t *data, uint16_t length)

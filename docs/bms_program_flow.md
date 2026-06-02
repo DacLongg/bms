@@ -48,9 +48,11 @@ Truoc khi vao vong `mainapp()`, `main.c` khoi tao USART2 va goi `debug_log_init(
 
 Cac cau hinh chinh:
 
-- Cell mapping 10S: `BMS_BQ_VCELL_MODE_10S = 0xAAAF`.
+- Cell mapping 10S: `BMS_BQ_VCELL_MODE_10S = 0x03FF` cho cac kenh VC0..VC9 lien tiep.
 - Enable protection group A/B/C cua BQ.
 - Cau hinh FET options, predischarge timeout va stop delta.
+- Cau hinh DCHG pin va DDSG pin thanh output chuc nang BQ voi gia tri `0x2A` (PIN_FXN=2, active-high, high drive tu REG1).
+- Cau hinh DA `0x05` de Stack/PACK/LD direct command tra ve centivolt; firmware scale ve mV.
 - Cau hinh TS1/TS3 la thermistor theo mach nguyen ly hien tai.
 - Cau hinh over-voltage cell: `BMS_CELL_OV_CUTOFF_MV = 4150 mV`.
 - Cau hinh under-voltage cell: `BMS_CELL_UV_CUTOFF_MV = 3500 mV`.
@@ -85,7 +87,7 @@ Moi lan `BMS_Update()` chay theo thu tu co dinh:
 
 - `cellVoltages[10]`: dien ap tung cell theo mapping 10S cua pack.
 - `stackVoltage`: dien ap stack/top-of-stack doc tu BQ.
-- `packVoltage`: dien ap tai chan PACK doc tu BQ.
+- `packVoltage`: dien ap tai chan PACK doc tu BQ, raw BQ theo centivolt va firmware scale ve mV.
 - `current_mA`: dong hien tai tu BQ.
 - `temperature[0]`: TS1.
 - `temperature[1]`: TS3.

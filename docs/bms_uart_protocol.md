@@ -41,6 +41,7 @@ Status values:
 | `0x02` | Bad command |
 | `0x03` | Busy |
 | `0x04` | Internal error |
+| `0x05` | Bad payload |
 
 ## Commands
 
@@ -60,7 +61,7 @@ Request payload: empty.
 
 Response data after `STATUS`:
 
-Current `protocolVersion` is `0x02`.
+Current `protocolVersion` is `0x03`.
 
 | Offset | Type | Field |
 | --- | --- | --- |
@@ -182,3 +183,81 @@ dischargeOtCutoff_C:i16
 undertempCutoff_C:i16
 nominalCapacity_mAh:u32
 ```
+
+### `0x20` OTP Check
+
+Request payload: empty.
+
+Runs BQ76952 `OTP_WR_CHECK` after entering Full Access and Config Update mode. The command does not write OTP.
+
+Response data after `STATUS`:
+
+```text
+otpFlags:u16
+securityState:u8
+checkResult:u8
+checkDataFailAddr:u16
+writeResult:u8
+writeDataFailAddr:u16
+batteryStatusRaw:u16
+staticConfigSignature:u16
+stackVoltage_mV:u16
+packVoltage_mV:u16
+internalTemp_C:i16
+reg0Config:u8
+reg12Control:u8
+daConfig:u8
+vcellMode:u16
+dchgPinConfig:u8
+ddsgPinConfig:u8
+dfetoffPinConfig:u8
+```
+
+`checkResult` and `writeResult` use BQ76952 OTP result bits:
+
+| Bit | Field |
+| --- | --- |
+| 7 | OK |
+| 5 | LOCK |
+| 4 | NOSIG |
+| 3 | NODATA |
+| 2 | HT |
+| 1 | LV |
+| 0 | HV |
+
+`otpFlags`:
+
+| Bit | Field |
+| --- | --- |
+| 0 | fullAccessOk |
+| 1 | configUpdateOk |
+| 2 | checkOk |
+| 3 | writeOk |
+| 4 | otpBlocked |
+| 5 | otpPending |
+| 6 | dchgPinConfigOk (`0x2A`) |
+| 7 | ddsgPinConfigOk (`0x2A`) |
+| 8 | daConfigUsesCentivolt |
+| 9 | checkLock |
+| 10 | checkNoSignature |
+| 11 | checkNoData |
+| 12 | checkHighTemp |
+| 13 | checkLowVoltage |
+| 14 | checkHighVoltage |
+| 15 | writeFailed |
+
+### `0x21` OTP Write
+
+Request payload:
+
+```text
+0x4F 0x54 0x50 0x21
+```
+
+The payload is ASCII `OTP!` and is required to avoid accidental OTP programming. Response data is the same layout as `0x20`. `STATUS=OK` means the command was parsed; use `otpFlags.writeOk` and `writeResult` to know whether OTP programming succeeded.
+
+### `0x22` OTP Read
+
+Request payload: empty.
+
+Response data is the same layout as `0x20`, but no `OTP_WR_CHECK` or `OTP_WRITE` is issued. This reads the active BQ76952 configuration RAM/status snapshot. BQ76952 does not provide a raw direct-read of OTP contents; after boot, valid OTP contents are reflected through these data-memory/config fields.

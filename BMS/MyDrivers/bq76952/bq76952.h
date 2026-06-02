@@ -130,6 +130,20 @@ typedef enum {
 
 #define BQ_REG1_VOLTAGE_CODE 0x06U
 #define BQ_REG2_VOLTAGE_CODE 0x07U
+#define BQ_DA_CONFIG_USER_VOLTS_CV 0x04U
+#define BQ_DA_CONFIG_USER_AMPS_MA 0x01U
+#define BQ_DA_CONFIG_DEFAULT (BQ_DA_CONFIG_USER_VOLTS_CV | BQ_DA_CONFIG_USER_AMPS_MA)
+
+#define BQ_PIN_CONFIG_DCHG_ACTIVE_HIGH 0x2AU
+#define BQ_PIN_CONFIG_DDSG_ACTIVE_HIGH 0x2AU
+
+#define BQ_OTP_RESULT_OK     0x80U
+#define BQ_OTP_RESULT_LOCK   0x20U
+#define BQ_OTP_RESULT_NOSIG  0x10U
+#define BQ_OTP_RESULT_NODATA 0x08U
+#define BQ_OTP_RESULT_HT     0x04U
+#define BQ_OTP_RESULT_LV     0x02U
+#define BQ_OTP_RESULT_HV     0x01U
 
 /* Các cờ bảo vệ đang active trong Safety Status A. */
 typedef union {
@@ -223,6 +237,32 @@ typedef union {
         uint16_t CONFIG_UPDATE_MODE : 1;
     } bits;
 } bq76952_battery_status_t;
+
+typedef struct {
+    bool fullAccessOk;
+    bool configUpdateOk;
+    bool checkOk;
+    bool writeOk;
+    uint8_t checkResult;
+    uint8_t writeResult;
+    uint16_t checkDataFailAddr;
+    uint16_t writeDataFailAddr;
+    uint16_t batteryStatusRaw;
+    uint8_t securityState;
+    bool otpBlocked;
+    bool otpPending;
+    uint16_t stackVoltage_mV;
+    uint16_t packVoltage_mV;
+    int16_t internalTemp_C;
+    uint16_t staticConfigSignature;
+    uint8_t reg0Config;
+    uint8_t reg12Control;
+    uint8_t daConfig;
+    uint16_t vcellMode;
+    uint8_t dchgPinConfig;
+    uint8_t ddsgPinConfig;
+    uint8_t dfetoffPinConfig;
+} bq76952_otp_status_t;
 
 /* Khởi tạo driver/I2C và kiểm tra metadata cơ bản; BMS chịu trách nhiệm cấu hình runtime. */
 void bq76952_init(void);
@@ -320,6 +360,12 @@ bool bq76952_Enter_FullAccessMode(void);
 bool bq76952_configure_before_OTP_write(void);
 /* Kiểm tra OTP đã từng được cấu hình/chương trình hay chưa. */
 bool bq76952_is_OTP_already_programmed(void);
+/* Đọc snapshot cấu hình/trạng thái liên quan OTP và pin config. */
+bool bq76952_readOTPStatus(bq76952_otp_status_t *status);
+/* Chạy OTP_WR_CHECK và trả chi tiết điều kiện ghi OTP. */
+bool bq76952_checkOTPWriteReady(bq76952_otp_status_t *status);
+/* Ghi OTP và trả chi tiết kết quả OTP_WRITE. */
+bool bq76952_program_OTP_with_status(bq76952_otp_status_t *status);
 /* Chạy chuỗi OTP write, chỉ nên dùng sau khi đã xác minh cấu hình cuối cùng. */
 bool bq76952_program_OTP(void);
 /* Bật pre-regulator nội bộ. */
@@ -392,6 +438,8 @@ unsigned int bq76952_getAlertStatusRegister(void);
 byte bq76952_HandleAlarm(void);
 /* Đọc battery status và giải mã ra bitfield. */
 bq76952_battery_status_t bq76952_getBatteryStatusRegister(void);
+/* Đọc raw Battery Status direct-command để debug/protocol. */
+unsigned int bq76952_getBatteryStatusRaw(void);
 /* Lay ket qua verify cua lan ghi data memory gan nhat. */
 bool bq76952_getLastWriteVerify(bq76952_write_verify_t *status);
 /* Đọc trực tiếp data memory tại địa chỉ addr với kích thước 1 hoặc 2 byte. */

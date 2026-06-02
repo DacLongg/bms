@@ -12,6 +12,7 @@
 ## 2) Cơ chế ngắt cho toàn bộ input
 - `ALERT`, `DCHG`, `DDSG` đều chạy `GPIO_MODE_IT_RISING_FALLING`.
 - `DCHG/DDSG` được cập nhật cả trong `HAL_GPIO_EXTI_Callback()` và được poll lại trong mỗi chu kỳ `BMS_Update()`.
+- BQ76952 U1 pin 31/32 la `DCHG`/`DDSG`; firmware cau hinh data memory `DCHG Pin Config` va `DDSG Pin Config` = `0x2A` de hai chan nay la output chuc nang BQ active-high.
 - `ALERT` set cờ xử lý nhanh qua `BMS_NotifyAlertInterrupt()`; ngoài ra pin ALERT cũng được poll theo chu kỳ và vẫn có fallback 1s để chống miss IRQ.
 
 ## 3) Luồng phần cứng trong `BMS_Update`
@@ -33,4 +34,5 @@
 
 ## 5) Lưu ý
 - `BAT_ADC` là ước lượng theo tỉ lệ cầu chia R86/R85 = 665k/13.3k, dùng cho giám sát nhanh.
+- Điện áp PACK chính trong `packVoltage` đọc từ direct command BQ; firmware cấu hình BQ trả user-volts theo centivolt rồi scale về mV để tránh tràn trên pack 10S.
 - Nếu đo thực tế lệch, cần hiệu chuẩn lại hệ số divider và `Vref` theo board thực.
