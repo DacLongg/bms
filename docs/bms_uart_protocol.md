@@ -123,8 +123,8 @@ Fault bitmap:
 | 7 | shortCircuit |
 | 8 | bqSafetyFault |
 | 9 | communicationFault |
-| 10 | chargeGateFaultSignal |
-| 11 | dischargeGateFaultSignal |
+| 10 | reserved |
+| 11 | reserved |
 
 FET bitmap:
 
@@ -159,7 +159,7 @@ Response data after `STATUS`:
 faultBitmap:u16 gateSignalBitmap:u8 alertActive:u8 alertCounter:u32
 ```
 
-`gateSignalBitmap` bit 0 is charge gate fault signal, bit 1 is discharge gate fault signal.
+`gateSignalBitmap` bit 0 is DCHG pin level, bit 1 is DDSG pin level. With the current BQ pin config, high means the corresponding BQ FET output is disabled; these bits are status signals, not standalone faults.
 
 ### `0x13` Read Limits
 

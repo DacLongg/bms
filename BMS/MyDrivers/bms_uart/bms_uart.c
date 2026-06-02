@@ -584,8 +584,6 @@ static uint16_t bms_uart_fault_bitmap(const BMS_Tracking_t *tracking)
     bitmap |= tracking->faults.shortCircuit ? (uint16_t)(1U << 7) : 0U;
     bitmap |= tracking->faults.bqSafetyFault ? (uint16_t)(1U << 8) : 0U;
     bitmap |= tracking->faults.communicationFault ? (uint16_t)(1U << 9) : 0U;
-    bitmap |= tracking->chargeGateFaultSignal ? (uint16_t)(1U << 10) : 0U;
-    bitmap |= tracking->dischargeGateFaultSignal ? (uint16_t)(1U << 11) : 0U;
     return bitmap;
 }
 

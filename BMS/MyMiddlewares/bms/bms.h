@@ -95,6 +95,9 @@ typedef struct {
     BMS_FaultFlags_t faults;
     bool     chargeDisabled;
     bool     dischargeDisabled;
+    /* Legacy field names: these store raw DCHG/DDSG pin levels.
+     * High means the corresponding BQ FET output is disabled, not necessarily faulted.
+     */
     bool     chargeGateFaultSignal;
     bool     dischargeGateFaultSignal;
     bool     fetOffAsserted;

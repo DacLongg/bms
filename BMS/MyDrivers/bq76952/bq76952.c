@@ -97,7 +97,6 @@ static bool bq76952_readDataMemoryBytes(unsigned int addr, byte *data, byte noOf
 static bool bq76952_waitConfigUpdateMode(bool expected, uint32_t timeout_ms);
 static bool bq76952_writeDataMemoryPayload(unsigned int addr, int16_t data, byte noOfBytes);
 static bool bq76952_writeDataMemory(unsigned int addr, int16_t data, byte noOfBytes);
-static bool bq76952_writeDataMemoryWithoutConfigUpdate(unsigned int addr, int16_t data, byte noOfBytes);
 static void bq76952_fillOTPStatusSnapshot(bq76952_otp_status_t *status);
 static bool bq76952_otpResultIsOk(uint8_t result);
 
@@ -370,45 +369,6 @@ static bool bq76952_writeDataMemory(unsigned int addr, int16_t data, byte noOfBy
 
     bq76952_exitConfigUpdate();
     (void)bq76952_waitConfigUpdateMode(false, BQ_CONFIG_UPDATE_TIMEOUT_MS);
-    return g_last_write_verify.verified;
-}
-
-/* Giống hàm trên nhưng dùng khi caller đã xử lý mode hoặc cần ghi nhanh nhiều lệnh liên tiếp. */
-static bool bq76952_writeDataMemoryWithoutConfigUpdate(unsigned int addr, int16_t data, byte noOfBytes)
-{
-    byte readback[2] = {0};
-    uint16_t actual = 0U;
-    uint16_t expected = bq76952_dataMemoryExpectedValue(data, noOfBytes);
-
-    g_last_write_verify = (bq76952_write_verify_t){
-        .attempted = true,
-        .i2cOk = false,
-        .configUpdateOk = true,
-        .readbackOk = false,
-        .verified = false,
-        .addr = addr,
-        .expected = expected,
-        .actual = 0U,
-        .size = noOfBytes
-    };
-
-    if ((noOfBytes != 1U) && (noOfBytes != 2U)) {
-        return false;
-    }
-
-    g_last_write_verify.i2cOk = bq76952_writeDataMemoryPayload(addr, data, noOfBytes);
-    if (g_last_write_verify.i2cOk) {
-        HAL_Delay(2U);
-        g_last_write_verify.readbackOk = bq76952_readDataMemoryBytes(addr, readback, noOfBytes);
-        if (g_last_write_verify.readbackOk) {
-            actual = (noOfBytes == 1U) ?
-                     (uint16_t)readback[0] :
-                     (uint16_t)(((uint16_t)readback[1] << 8) | readback[0]);
-            g_last_write_verify.actual = actual;
-            g_last_write_verify.verified = (actual == expected);
-        }
-    }
-
     return g_last_write_verify.verified;
 }
 

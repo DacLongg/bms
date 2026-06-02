@@ -25,7 +25,7 @@
 - đọc `BAT_ADC`
 - tắt `BATS_EN`
 - cập nhật `batAdcRaw`, `batAdcPin_mV`, `batAdcEstimatedPack_mV`
-5. `BMS_UpdateState()` gộp thêm `chargeGateFaultSignal/dischargeGateFaultSignal` vào điều kiện disable CHG/DSG.
+5. `BMS_UpdateState()` chỉ dùng fault thật từ BMS/BQ protection để disable CHG/DSG; DCHG/DDSG chỉ là trạng thái chân/wakeup.
 6. `BMS_ApplyFetPolicy()` phối hợp `FETOFF` + lệnh I2C để đóng/cắt FET.
 
 ## 4) API liên quan

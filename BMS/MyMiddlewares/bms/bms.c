@@ -140,8 +140,6 @@ bool BMS_IsFaultActive(void)
            g_bms_tracking.faults.underTemperature ||
            g_bms_tracking.faults.chargeOverCurrent ||
            g_bms_tracking.faults.dischargeOverCurrent ||
-           g_bms_tracking.chargeGateFaultSignal ||
-           g_bms_tracking.dischargeGateFaultSignal ||
            g_bms_tracking.faults.shortCircuit ||
            g_bms_tracking.faults.bqSafetyFault ||
            g_bms_tracking.faults.communicationFault;
@@ -365,6 +363,9 @@ static void BMS_HandleHardwareSignals(BMS_Tracking_t *tracking, uint32_t now)
     g_ddsg_signal_active = (HAL_GPIO_ReadPin(DDSG_GPIO_Port, DDSG_Pin) == GPIO_PIN_SET);
     alert_signal_active = (HAL_GPIO_ReadPin(ALERT_GPIO_Port, ALERT_Pin) == GPIO_PIN_SET);
 
+    /* DCHG/DDSG high means the corresponding BQ FET output is disabled.
+     * It is a status/wakeup signal, not a standalone pack fault.
+     */
     tracking->chargeGateFaultSignal = g_dchg_signal_active;
     tracking->dischargeGateFaultSignal = g_ddsg_signal_active;
 
@@ -606,7 +607,6 @@ static void BMS_UpdateState(BMS_Tracking_t *tracking)
                                tracking->faults.chargeOverTemperature ||
                                tracking->faults.underTemperature ||
                                tracking->faults.chargeOverCurrent ||
-                               tracking->chargeGateFaultSignal ||
                                tracking->faults.shortCircuit ||
                                tracking->faults.bqSafetyFault ||
                                tracking->faults.communicationFault;
@@ -615,7 +615,6 @@ static void BMS_UpdateState(BMS_Tracking_t *tracking)
                                   tracking->faults.dischargeOverTemperature ||
                                   tracking->faults.underTemperature ||
                                   tracking->faults.dischargeOverCurrent ||
-                                  tracking->dischargeGateFaultSignal ||
                                   tracking->faults.shortCircuit ||
                                   tracking->faults.bqSafetyFault ||
                                   tracking->faults.communicationFault;
@@ -646,8 +645,6 @@ static void BMS_UpdateState(BMS_Tracking_t *tracking)
                          (tracking->faults.underTemperature ? 0x010U : 0U) |
                          (tracking->faults.chargeOverCurrent ? 0x020U : 0U) |
                          (tracking->faults.dischargeOverCurrent ? 0x040U : 0U) |
-                         (tracking->chargeGateFaultSignal ? 0x400U : 0U) |
-                         (tracking->dischargeGateFaultSignal ? 0x800U : 0U) |
                          (tracking->faults.shortCircuit ? 0x080U : 0U) |
                          (tracking->faults.bqSafetyFault ? 0x100U : 0U) |
                          (tracking->faults.communicationFault ? 0x200U : 0U)));
