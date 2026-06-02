@@ -25,6 +25,8 @@
 #define CMD_DIR_ALARM_RAW_STATUS    0x64U
 #define CMD_DIR_INT_TEMP            0x68U
 #define CMD_DIR_FET_STAT            0x7FU
+#define BQ_FET_STAT_CHG_FET         0x01U
+#define BQ_FET_STAT_DSG_FET         0x04U
 
 #define CMD_DEVICE_NUMBER           0x0001U
 #define CMD_HW_VERSION              0x0003U
@@ -513,6 +515,11 @@ bool bq76952_areFETs_Enabled(void)
     return (bq76952_getManufacturingStatus() & 0x10U) != 0U;
 }
 
+byte bq76952_getFetStatusRaw(void)
+{
+    return (byte)bq76952_directCommand(CMD_DIR_FET_STAT);
+}
+
 unsigned int bq76952_getStackVoltage(void)
 {
     return bq76952_userVoltageCommandToMv(CMD_READ_VOLTAGE_STACK);
@@ -901,12 +908,22 @@ void bq76952_setFET_ENABLE(void)
 
 bool bq76952_isCharging(void)
 {
-    return ((byte)bq76952_directCommand(CMD_DIR_FET_STAT) & 0x01U) != 0U;
+    return bq76952_isChargeFetOn();
 }
 
 bool bq76952_isDischarging(void)
 {
-    return ((byte)bq76952_directCommand(CMD_DIR_FET_STAT) & 0x04U) != 0U;
+    return bq76952_isDischargeFetOn();
+}
+
+bool bq76952_isChargeFetOn(void)
+{
+    return (bq76952_getFetStatusRaw() & BQ_FET_STAT_CHG_FET) != 0U;
+}
+
+bool bq76952_isDischargeFetOn(void)
+{
+    return (bq76952_getFetStatusRaw() & BQ_FET_STAT_DSG_FET) != 0U;
 }
 
 void bq76952_setCellBalancingEnabled(bool enabled)

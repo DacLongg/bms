@@ -39,7 +39,7 @@ static void MainApp_LogBatteryInfo(const BMS_Tracking_t *tracking)
         return;
     }
 
-    BMS_LOG_INFO("bat c=%lu st=%s pack=%u adcPack=%u adcRaw=%u adcPin=%u cur=%ld t=%d/%d",
+    BMS_LOG_INFO("bat c=%lu st=%s pack=%u adcPack=%u adcRaw=%u adcPin=%u cur=%ld dir=%u chgNow=%u dchNow=%u chgFet=%u dchFet=%u fetEn=%u t=%d/%d",
                  (unsigned long)tracking->circle_counter,
                  BMS_StateName(tracking->state),
                  tracking->packVoltage,
@@ -47,6 +47,12 @@ static void MainApp_LogBatteryInfo(const BMS_Tracking_t *tracking)
                  tracking->batAdcRaw,
                  tracking->batAdcPin_mV,
                  (long)tracking->current_mA,
+                 (unsigned int)tracking->currentDirection,
+                 tracking->charging ? 1U : 0U,
+                 tracking->discharging ? 1U : 0U,
+                 tracking->chargeFetEnabled ? 1U : 0U,
+                 tracking->dischargeFetEnabled ? 1U : 0U,
+                 tracking->fetsEnabled ? 1U : 0U,
                  (int)tracking->temperature[0],
                  (int)tracking->temperature[1]);
     BMS_LOG_INFO("cell min = %u : avg = %u : max = %u : delta = %u : bal = 0x%03x",
@@ -192,7 +198,7 @@ void mainapp(void)
                 BMS_LOG_WARN("wake unknown");
             }
         }
-        BMS_LOG_INFO("update done state=%s chg = %s; Dis=%s faults:Ov:%s, Uv:%s,Ot:%s,Dt:%s,Ut:%s,Occ:%s,Dcc:%s,CGF:%s,DGF:%s,SC:%s,BQF:%s,Commu:%s",
+        BMS_LOG_INFO("update done state=%s chgDis=%s dchDis=%s faults:Ov:%s, Uv:%s,Ot:%s,Dt:%s,Ut:%s,Occ:%s,Dcc:%s,CGF:%s,DGF:%s,SC:%s,BQF:%s,Commu:%s",
                      BMS_StateName(tracking->state),
                      tracking->chargeDisabled ? "true" : "false",
                      tracking->dischargeDisabled ? "true" : "false",

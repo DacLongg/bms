@@ -294,6 +294,8 @@ int bq76952_getCurrentAvg(void);
 bool bq76952_areFETs_Enabled(void);
 /* Đọc thanh ghi Manufacturing Status hiện tại. */
 unsigned int bq76952_getManufacturingStatus(void);
+/* Read raw FET Status() direct command. Bit0=CHG FET, bit2=DSG FET. */
+byte bq76952_getFetStatusRaw(void);
 /* Đọc tổng điện áp stack/battery, đơn vị mV. */
 unsigned int bq76952_getStackVoltage(void);
 /* Đọc điện áp tại chân PACK của BQ76952, đơn vị mV. */
@@ -312,9 +314,13 @@ bq76952_temp_t bq76952_getTemperatureStatus(void);
 void bq76952_setFET(bq76952_fet_t fet, bq76952_fet_state_t state);
 /* Bật quyền cho khối FET hoạt động sau khi khởi tạo. */
 void bq76952_setFET_ENABLE(void);
-/* Trả về true nếu đường xả đang bật. */
+/* Return true if BQ reports the discharge FET output is on. */
+bool bq76952_isDischargeFetOn(void);
+/* Return true if BQ reports the charge FET output is on. */
+bool bq76952_isChargeFetOn(void);
+/* Legacy alias for bq76952_isDischargeFetOn(). */
 bool bq76952_isDischarging(void);
-/* Trả về true nếu đường sạc đang bật. */
+/* Legacy alias for bq76952_isChargeFetOn(). */
 bool bq76952_isCharging(void);
 /* Bật/tắt host/manual cell balancing trong data memory của BQ. */
 void bq76952_setCellBalancingEnabled(bool enabled);

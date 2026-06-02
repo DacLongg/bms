@@ -13,6 +13,9 @@
 #define BMS_SHUT_HOLD_MS 1100U
 #define BMS_BAT_ADC_SAMPLE_MS 1000U
 #define BMS_BAT_ADC_SETTLE_MS 5U
+#define BMS_FET_STATUS_SETTLE_MS 2U
+#define BMS_BQ_FET_STAT_CHG_FET 0x01U
+#define BMS_BQ_FET_STAT_DSG_FET 0x04U
 #define BMS_BAT_ADC_REF_MV 3300UL
 #define BMS_BAT_ADC_COUNTS 4095UL
 #define BMS_BAT_ADC_DIVIDER_NUM 678300UL
@@ -51,6 +54,7 @@ static void BMS_SetFetoff(bool asserted);
 static void BMS_SetBatSenseEnable(bool enabled);
 static void BMS_UpdateCellStatistics(BMS_Tracking_t *tracking);
 static void BMS_UpdateCurrentDirection(BMS_Tracking_t *tracking);
+static void BMS_UpdateFetStatus(BMS_Tracking_t *tracking);
 static void BMS_UpdateFaultFlags(BMS_Tracking_t *tracking);
 static void BMS_MergeBQFaultFlags(BMS_Tracking_t *tracking);
 static void BMS_UpdateState(BMS_Tracking_t *tracking);
@@ -460,14 +464,10 @@ static void BMS_ReadMeasurements(BMS_Tracking_t *tracking)
 
 
     tracking->stackVoltage = 0U;
-    tracking->current_mA = (int32_t)bq76952_getCurrentNow();
+    tracking->current_mA = (int32_t)bq76952_getCurrentAvg();
     tracking->temperature[0] = (int16_t)bq76952_getThermistorTemp(TS1);
     tracking->temperature[1] = (int16_t)bq76952_getThermistorTemp(TS3);
-    tracking->charging = bq76952_isCharging();
-    tracking->discharging = bq76952_isDischarging();
-    tracking->chargeFetEnabled = tracking->charging;
-    tracking->dischargeFetEnabled = tracking->discharging;
-    tracking->fetsEnabled = bq76952_areFETs_Enabled();
+    BMS_UpdateFetStatus(tracking);
     batt_status = bq76952_getBatteryStatusRegister();
     tracking->bqSleepMode = batt_status.bits.SLEEP_MODE != 0U;
     tracking->bqSleepAllowed = batt_status.bits.SLEEP_EN_ALLOWED != 0U;
@@ -524,6 +524,23 @@ static void BMS_UpdateCurrentDirection(BMS_Tracking_t *tracking)
     {
         tracking->currentDirection = BMS_CURRENT_IDLE;
     }
+
+    tracking->charging = (tracking->currentDirection == BMS_CURRENT_CHARGE);
+    tracking->discharging = (tracking->currentDirection == BMS_CURRENT_DISCHARGE);
+}
+
+static void BMS_UpdateFetStatus(BMS_Tracking_t *tracking)
+{
+    byte fet_status;
+
+    if (tracking == NULL) {
+        return;
+    }
+
+    fet_status = bq76952_getFetStatusRaw();
+    tracking->chargeFetEnabled = (fet_status & BMS_BQ_FET_STAT_CHG_FET) != 0U;
+    tracking->dischargeFetEnabled = (fet_status & BMS_BQ_FET_STAT_DSG_FET) != 0U;
+    tracking->fetsEnabled = bq76952_areFETs_Enabled();
 }
 
 static void BMS_UpdateFaultFlags(BMS_Tracking_t *tracking)
@@ -687,29 +704,31 @@ static void BMS_ApplyFetPolicy(BMS_Tracking_t *tracking)
     if (tracking->chargeDisabled && tracking->dischargeDisabled) {
         BMS_SetFetoff(true);
         bq76952_setFET(ALL, OFF);
-        tracking->chargeFetEnabled = false;
-        tracking->dischargeFetEnabled = false;
+        HAL_Delay(BMS_FET_STATUS_SETTLE_MS);
+        BMS_UpdateFetStatus(tracking);
         return;
     }
 
     if (tracking->chargeDisabled) {
         BMS_SetFetoff(false);
         bq76952_setFET(CHG, OFF);
-        tracking->chargeFetEnabled = false;
+        HAL_Delay(BMS_FET_STATUS_SETTLE_MS);
+        BMS_UpdateFetStatus(tracking);
         return;
     }
 
     if (tracking->dischargeDisabled) {
         BMS_SetFetoff(false);
         bq76952_setFET(DCH, OFF);
-        tracking->dischargeFetEnabled = false;
+        HAL_Delay(BMS_FET_STATUS_SETTLE_MS);
+        BMS_UpdateFetStatus(tracking);
         return;
     }
 
     BMS_SetFetoff(false);
     bq76952_setFET(ALL, ON);
-    tracking->chargeFetEnabled = true;
-    tracking->dischargeFetEnabled = true;
+    HAL_Delay(BMS_FET_STATUS_SETTLE_MS);
+    BMS_UpdateFetStatus(tracking);
 }
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)

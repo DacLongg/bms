@@ -102,10 +102,10 @@ Tài liệu này mô tả cách hoạt động của tất cả hàm trong file 
 - `packVoltage` duoc tinh bang tong `cellVoltages[]` trong `BMS_UpdateCellStatistics()`.
 - `current_mA`
 - `temperature[0] = TS1`, `temperature[1] = TS3`
-- trạng thái `charging`, `discharging`
-- trạng thái FET global `fetsEnabled`
-5. Map tạm `chargeFetEnabled = charging`, `dischargeFetEnabled = discharging`.
-- Lưu ý: Giá trị FET này có thể bị điều chỉnh lại bởi `BMS_ApplyFetPolicy`.
+- `chargeFetEnabled`, `dischargeFetEnabled` doc tu raw `FET Status()` cua BQ.
+- `fetsEnabled` doc tu `ManufacturingStatus.FET_EN`.
+5. `charging`, `discharging` duoc cap nhat sau do trong `BMS_UpdateCurrentDirection()` dua tren dong thuc te.
+- Luu y: Sau khi `BMS_ApplyFetPolicy()` gui lenh bat/tat FET, firmware doc lai `FET Status()` de tracking phan anh trang thai BQ bao ve.
 
 ## 9. `static void BMS_UpdateCellStatistics(BMS_Tracking_t *tracking)`
 - Mục đích: Tính min/max/average/delta cell voltage.
@@ -179,13 +179,13 @@ Tài liệu này mô tả cách hoạt động của tất cả hàm trong file 
 - Mục đích: Áp policy state/fault xuống phần cứng FET.
 - Logic:
 1. Nếu cả charge và discharge bị disable:
-- `bq76952_setFET(ALL, OFF)`, set cả hai cờ FET false.
+- `bq76952_setFET(ALL, OFF)`, sau do doc lai `FET Status()`.
 2. Nếu chỉ charge disable:
-- `bq76952_setFET(CHG, OFF)`, set `chargeFetEnabled=false`.
+- `bq76952_setFET(CHG, OFF)`, sau do doc lai `FET Status()`.
 3. Nếu chỉ discharge disable:
-- `bq76952_setFET(DCH, OFF)`, set `dischargeFetEnabled=false`.
+- `bq76952_setFET(DCH, OFF)`, sau do doc lai `FET Status()`.
 4. Nếu không disable gì:
-- `bq76952_setFET(ALL, ON)`, set cả hai cờ true.
+- `bq76952_setFET(ALL, ON)`, sau do doc lai `FET Status()`.
 - Ý nghĩa: Cơ chế thực thi cuối cùng của bảo vệ mềm.
 
 ## 15. `static void BMS_UpdateCoulombCounter(BMS_Tracking_t *tracking, uint32_t dt_ms)`
