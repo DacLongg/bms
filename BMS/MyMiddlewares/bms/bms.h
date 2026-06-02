@@ -29,6 +29,7 @@
 #define BMS_DISCHARGE_OT_RECOVER_C                  55
 #define BMS_UNDERTEMP_CUTOFF_C                      0
 #define BMS_UNDERTEMP_RECOVER_C                     5
+#define BMS_BQ_TEMPERATURE_PROTECTION_DELAY_SEC     2U
 
 /* Hardware 10S uses consecutive BQ cell channels VC0..VC10. */
 #define BMS_BQ_VCELL_MODE_10S                       0x03FFU

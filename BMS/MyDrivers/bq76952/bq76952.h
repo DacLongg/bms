@@ -336,6 +336,8 @@ void bq76952_setShutdownStackVoltage(unsigned int voltage);
 void bq76952_setChargingOvercurrentProtection(unsigned int mv, byte ms);
 /* Cấu hình ngưỡng nhiệt độ tối đa cho sạc, độ C và thời gian giữ lỗi. */
 void bq76952_setChargingTemperatureMaxLimit(int temp, byte sec);
+/* Cấu hình ngưỡng nhiệt độ thấp khi sạc, độ C, recovery và thời gian giữ lỗi. */
+void bq76952_setChargingTemperatureMinLimit(int threshold, int recovery, byte sec);
 /* Cấu hình bảo vệ quá dòng khi xả, đầu vào theo mV trên shunt và ms. */
 void bq76952_setDischargingOvercurrentProtection(unsigned int mv, byte ms);
 /* Cấu hình ngưỡng OCD3 recovery/trigger theo dòng mA quy đổi nội bộ của IC. */
@@ -346,6 +348,8 @@ void bq76952_setDischargingOvercurrentProtection_Recovery(int16_t mA);
 void bq76952_setDischargingShortcircuitProtection(bq76952_scd_thresh_t thresh, unsigned int us);
 /* Cấu hình ngưỡng nhiệt độ tối đa cho xả, độ C và thời gian giữ lỗi. */
 void bq76952_setDischargingTemperatureMaxLimit(int temp, byte sec);
+/* Cấu hình ngưỡng nhiệt độ thấp khi xả, độ C, recovery và thời gian giữ lỗi. */
+void bq76952_setDischargingTemperatureMinLimit(int threshold, int recovery, byte sec);
 /* Đọc device number để xác minh đúng loại IC. */
 unsigned int bq76952_getDeviceNumber(void);
 /* Đọc phiên bản phần cứng của IC. */

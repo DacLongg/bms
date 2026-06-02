@@ -292,8 +292,16 @@ static void BMS_ConfigureMonitor(void)
     bq76952_setSF_AlertMask_C();
     bq76952_setCellOvervoltageProtection(BMS_CELL_OV_CUTOFF_MV, BMS_BQ_PROTECTION_DELAY_MS);
     bq76952_setCellUndervoltageProtection(BMS_CELL_UV_CUTOFF_MV, BMS_BQ_PROTECTION_DELAY_MS);
-    bq76952_setChargingTemperatureMaxLimit(BMS_CHARGE_OT_CUTOFF_C, 2U);
-    bq76952_setDischargingTemperatureMaxLimit(BMS_DISCHARGE_OT_CUTOFF_C, 2U);
+    bq76952_setChargingTemperatureMaxLimit(BMS_CHARGE_OT_CUTOFF_C,
+                                           BMS_BQ_TEMPERATURE_PROTECTION_DELAY_SEC);
+    bq76952_setDischargingTemperatureMaxLimit(BMS_DISCHARGE_OT_CUTOFF_C,
+                                              BMS_BQ_TEMPERATURE_PROTECTION_DELAY_SEC);
+    bq76952_setChargingTemperatureMinLimit(BMS_UNDERTEMP_CUTOFF_C,
+                                           BMS_UNDERTEMP_RECOVER_C,
+                                           BMS_BQ_TEMPERATURE_PROTECTION_DELAY_SEC);
+    bq76952_setDischargingTemperatureMinLimit(BMS_UNDERTEMP_CUTOFF_C,
+                                              BMS_UNDERTEMP_RECOVER_C,
+                                              BMS_BQ_TEMPERATURE_PROTECTION_DELAY_SEC);
     bq76952_setCellBalancingEnabled(true);
 
     over_current_sense_mV = (((uint32_t)BMS_OVER_CURRENT_MA * BMS_BQ_SENSE_RESISTOR_UOHM) + 500000UL) / 1000000UL;

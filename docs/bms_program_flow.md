@@ -156,6 +156,7 @@ Firmware duy tri fault co hysteresis de tranh dong/ngat FET lien tuc tai nguong.
 - Discharge over-temperature clear khi tat ca TS `<= 55 C`.
 - Under-temperature set khi bat ky TS nao `<= 0 C`.
 - Under-temperature clear khi tat ca TS `>= 5 C`.
+- BQ `UTC/UTD` duoc cau hinh cung nguong `0 C`, recovery `5 C`, delay `2 s`.
 
 ### Current
 
@@ -177,6 +178,8 @@ Ngoai fault firmware, `BMS_MergeBQFaultFlags()` con OR them fault do BQ bao:
 - `OVERTEMP_DCHG`
 - `UNDERTEMP_CHG`
 - `UNDERTEMP_DCHG`
+
+`UNDERTEMP_CHG/UNDERTEMP_DCHG` la bit trong Safety Status B cua BQ. BQ tinh chung tu minimum cell temperature theo cac nguon nhiet duoc cau hinh la cell temperature, khong chi rieng gia tri TS ma MCU dang hien thi.
 
 ## 9. State Machine
 

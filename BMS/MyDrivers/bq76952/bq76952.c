@@ -17,8 +17,8 @@
 #define CMD_READ_VOLTAGE_PACK       0x36U
 
 #define CMD_DIR_SAFETY_STATUS_A     0x03U
+#define CMD_DIR_SAFETY_STATUS_B     0x05U
 #define CMD_DIR_SAFETY_ALERT_C      0x06U
-#define CMD_DIR_FTEMP               0x05U
 #define CMD_DIR_BATTERY_STATUS      0x12U
 #define CMD_DIR_CC2_CUR             0x3AU
 #define CMD_DIR_ALARM_STATUS        0x62U
@@ -47,6 +47,7 @@
 #define BIT_SA_CELL_UV              2U
 
 /* Vị trí bit trong Safety Status B. */
+#define BIT_SB_OTF                  7U
 #define BIT_SB_OTINT                6U
 #define BIT_SB_OTD                  5U
 #define BIT_SB_OTC                  4U
@@ -66,6 +67,13 @@
 #define BQ_USER_CV_TO_MV            10U
 #define BQ_OTP_CHECK_WAIT_MS        1000U
 #define BQ_OTP_WRITE_WAIT_MS        1000U
+
+#define UTC_THRESHOLD_CONFIG        0x92A6U
+#define UTC_DELAY_CONFIG            0x92A7U
+#define UTC_RECOVERY_CONFIG         0x92A8U
+#define UTD_THRESHOLD_CONFIG        0x92A9U
+#define UTD_DELAY_CONFIG            0x92AAU
+#define UTD_RECOVERY_CONFIG         0x92ABU
 
 
 static bq76952_protection_t     g_protection_status;
@@ -97,6 +105,7 @@ static bool bq76952_readDataMemoryBytes(unsigned int addr, byte *data, byte noOf
 static bool bq76952_waitConfigUpdateMode(bool expected, uint32_t timeout_ms);
 static bool bq76952_writeDataMemoryPayload(unsigned int addr, int16_t data, byte noOfBytes);
 static bool bq76952_writeDataMemory(unsigned int addr, int16_t data, byte noOfBytes);
+static int16_t bq76952_clampTemperatureLimit(int temp, int fallback);
 static void bq76952_fillOTPStatusSnapshot(bq76952_otp_status_t *status);
 static bool bq76952_otpResultIsOk(uint8_t result);
 
@@ -370,6 +379,15 @@ static bool bq76952_writeDataMemory(unsigned int addr, int16_t data, byte noOfBy
     bq76952_exitConfigUpdate();
     (void)bq76952_waitConfigUpdateMode(false, BQ_CONFIG_UPDATE_TIMEOUT_MS);
     return g_last_write_verify.verified;
+}
+
+/* Temperature protection limits are I1 values in degrees Celsius. */
+static int16_t bq76952_clampTemperatureLimit(int temp, int fallback)
+{
+    if (temp < -40 || temp > 120) {
+        temp = fallback;
+    }
+    return (int16_t)temp;
 }
 
 /* Đọc 1 hoặc 2 byte data memory tại địa chỉ addr.
@@ -839,10 +857,10 @@ bq76952_safety_alert_c_t bq76952_getSafetyAlert_C(void)
 bq76952_temp_t bq76952_getTemperatureStatus(void)
 {
     bq76952_temp_t status = {0};
-    byte regData = (byte)bq76952_directCommand(CMD_DIR_FTEMP);
+    byte regData = (byte)bq76952_directCommand(CMD_DIR_SAFETY_STATUS_B);
 
-    /* FTEMP là bitmap trạng thái nhiệt, không phải giá trị nhiệt độ tuyệt đối. */
-    status.bits.OVERTEMP_FET = BQ_READ_STATUS_BIT(regData, BIT_SB_OTC);
+    /* Safety Status B is a protection bitmap, not an absolute temperature value. */
+    status.bits.OVERTEMP_FET = BQ_READ_STATUS_BIT(regData, BIT_SB_OTF);
     status.bits.OVERTEMP_INTERNAL = BQ_READ_STATUS_BIT(regData, BIT_SB_OTINT);
     status.bits.OVERTEMP_DCHG = BQ_READ_STATUS_BIT(regData, BIT_SB_OTD);
     status.bits.OVERTEMP_CHG = BQ_READ_STATUS_BIT(regData, BIT_SB_OTC);
@@ -1038,22 +1056,28 @@ void bq76952_setDischargingShortcircuitProtection(bq76952_scd_thresh_t thresh, u
 void bq76952_setChargingTemperatureMaxLimit(int temp, byte sec)
 {
     /* Giới hạn temp lưu trực tiếp theo độ C nguyên; sec là thời gian xác nhận lỗi. */
-    if (temp < -40 || temp > 120) {
-        temp = 55;
-    }
-
-    bq76952_writeDataMemory(0x929AU, (int16_t)temp, 1U);
+    bq76952_writeDataMemory(0x929AU, bq76952_clampTemperatureLimit(temp, 55), 1U);
     bq76952_writeDataMemory(0x929BU, sec, 1U);
 }
 
 void bq76952_setDischargingTemperatureMaxLimit(int temp, byte sec)
 {
-    if (temp < -40 || temp > 120) {
-        temp = 60;
-    }
-
-    bq76952_writeDataMemory(0x929DU, (int16_t)temp, 1U);
+    bq76952_writeDataMemory(0x929DU, bq76952_clampTemperatureLimit(temp, 60), 1U);
     bq76952_writeDataMemory(0x929EU, sec, 1U);
+}
+
+void bq76952_setChargingTemperatureMinLimit(int threshold, int recovery, byte sec)
+{
+    bq76952_writeDataMemory(UTC_THRESHOLD_CONFIG, bq76952_clampTemperatureLimit(threshold, 0), 1U);
+    bq76952_writeDataMemory(UTC_DELAY_CONFIG, sec, 1U);
+    bq76952_writeDataMemory(UTC_RECOVERY_CONFIG, bq76952_clampTemperatureLimit(recovery, 5), 1U);
+}
+
+void bq76952_setDischargingTemperatureMinLimit(int threshold, int recovery, byte sec)
+{
+    bq76952_writeDataMemory(UTD_THRESHOLD_CONFIG, bq76952_clampTemperatureLimit(threshold, 0), 1U);
+    bq76952_writeDataMemory(UTD_DELAY_CONFIG, sec, 1U);
+    bq76952_writeDataMemory(UTD_RECOVERY_CONFIG, bq76952_clampTemperatureLimit(recovery, 5), 1U);
 }
 
 void bq76952_setEnablePreRegulator(void)
