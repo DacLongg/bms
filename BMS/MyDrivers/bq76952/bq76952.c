@@ -1244,10 +1244,13 @@ bool bq76952_setCurrentSenseCalibration(void)
 {
     uint8_t status = 1U;
 
-    status &= (uint8_t)bq76952_writeDataMemory(CC_GAIN, 0x41F2, 2U);
-    status &= (uint8_t)bq76952_writeDataMemory(CC_GAIN + 2U, 0x416F, 2U);
-    status &= (uint8_t)bq76952_writeDataMemory(CAPACITY_GAIN, 0x1C6A, 2U);
-    status &= (uint8_t)bq76952_writeDataMemory(CAPACITY_GAIN + 2U, 0x4A88, 2U);
+    /* Field calibration: measured current was about 25% high
+     * (0.8 A actual read near 1.0 A), so use 80% of the nominal 0.5 mOhm gain.
+     */
+    status &= (uint8_t)bq76952_writeDataMemory(CC_GAIN, 0x67F5, 2U);
+    status &= (uint8_t)bq76952_writeDataMemory(CC_GAIN + 2U, 0x413F, 2U);
+    status &= (uint8_t)bq76952_writeDataMemory(CAPACITY_GAIN, (int16_t)(uint16_t)0xC710U, 2U);
+    status &= (uint8_t)bq76952_writeDataMemory(CAPACITY_GAIN + 2U, 0x4A59, 2U);
     return status != 0U;
 }
 

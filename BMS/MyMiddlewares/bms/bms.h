@@ -25,7 +25,8 @@
 #define BMS_BALANCE_MAX_ACTIVE_CELLS                1U
 
 #define BMS_CURRENT_DEADBAND_MA                     300L
-#define BMS_OVER_CURRENT_MA                         75000L
+#define BMS_OVER_CURRENT_CHARGE                     1000
+#define BMS_OVER_CURRENT_DISCHARGE                  75000L
 #define BMS_SHORT_CIRCUIT_MA                        120000L
 #define BMS_NOMINAL_CAPACITY_MAH                    20000UL
 

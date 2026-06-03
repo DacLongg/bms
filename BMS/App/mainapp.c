@@ -8,10 +8,10 @@ extern UART_HandleTypeDef huart2;
 extern LPTIM_HandleTypeDef hlptim1;
 
 #define MAINAPP_BMS_UPDATE_MS 100U
-#define MAINAPP_IDLE_BEFORE_SLEEP_MINUTES 1U
+#define MAINAPP_IDLE_BEFORE_SLEEP_MINUTES 5U
 #define MAINAPP_SLEEP_WAKEUP_HOURS 2U
 
-#define MAINAPP_IDLE_BEFORE_SLEEP_MS ((uint32_t)(MAINAPP_IDLE_BEFORE_SLEEP_MINUTES) * 10UL * 1000UL)
+#define MAINAPP_IDLE_BEFORE_SLEEP_MS ((uint32_t)(MAINAPP_IDLE_BEFORE_SLEEP_MINUTES) * 60UL * 1000UL)
 #define MAINAPP_SLEEP_WAKEUP_MS ((uint32_t)(MAINAPP_SLEEP_WAKEUP_HOURS) * 60UL * 60UL * 1000UL)
 
 #if BMS_DEBUG_LOG_ENABLE
@@ -39,22 +39,21 @@ static void MainApp_LogBatteryInfo(const BMS_Tracking_t *tracking)
         return;
     }
 
-    BMS_LOG_INFO("bat c=%lu st=%s pack=%u adcPack=%u adcRaw=%u adcPin=%u cur=%ld dir=%u chgNow=%u dchNow=%u chgFet=%u dchFet=%u fetEn=%u t=%d/%d",
+    BMS_LOG_INFO("bat c=%lu st=%s pack=%u adcPack=%u cur=%ld dir=%u chgNow=%u dchNow=%u chgFet=%u dchFet=%u fetEn=%u",
                  (unsigned long)tracking->circle_counter,
                  BMS_StateName(tracking->state),
                  tracking->packVoltage,
                  tracking->batAdcEstimatedPack_mV,
-                 tracking->batAdcRaw,
-                 tracking->batAdcPin_mV,
                  (long)tracking->current_mA,
                  (unsigned int)tracking->currentDirection,
                  tracking->charging ? 1U : 0U,
                  tracking->discharging ? 1U : 0U,
                  tracking->chargeFetEnabled ? 1U : 0U,
                  tracking->dischargeFetEnabled ? 1U : 0U,
-                 tracking->fetsEnabled ? 1U : 0U,
+                 tracking->fetsEnabled ? 1U : 0U);
+    BMS_LOG_INFO("Temp1 = %u : Temp2 = %u",
                  (int)tracking->temperature[0],
-                 (int)tracking->temperature[1]);
+                (int)tracking->temperature[1]);
     BMS_LOG_INFO("cell min = %u : avg = %u : max = %u : delta = %u : bal = 0x%03x",
                  tracking->minCellVoltage,
                  tracking->averageCellVoltage,
@@ -196,10 +195,7 @@ void mainapp(void)
                 BMS_LOG_WARN("wake unknown");
             }
         }
-        BMS_LOG_INFO("update done state=%s chgDis=%s dchDis=%s \n faults:Ov:%s, Uv:%s,\n \
-                                                                        Ot:%s,Dt:%s,Ut:%s,\n \
-                                                                        Occ:%s,Dcc:%s,\n\
-                                                                        CGF:%s,DGF:%s,SC:%s,BQF:%s,Commu:%s",
+        BMS_LOG_INFO("update done state=%s chgDis=%s dchDis=%s faults:Ov:%s, Uv:%s, Ot:%s,Dt:%s,Ut:%s,",
                      BMS_StateName(tracking->state),
                      tracking->chargeDisabled ? "true" : "false",
                      tracking->dischargeDisabled ? "true" : "false",
@@ -207,7 +203,9 @@ void mainapp(void)
                      tracking->faults.cellUnderVoltage ? "true" : "false",
                      tracking->faults.chargeOverTemperature ? "true" : "false",
                      tracking->faults.dischargeOverTemperature ? "true" : "false",
-                     tracking->faults.underTemperature ? "true" : "false",
+                     tracking->faults.underTemperature ? "true" : "false");
+     // Occ:%s,Dcc:%s,CGF:%s,DGF:%s,SC:%s,BQF:%s,Commu:%s
+        BMS_LOG_INFO("OCChg = %s, OCDsg = %s, CGF:%s,DGF:%s,SC:%s,BQF:%s,Commu:%s", 
                      tracking->faults.chargeOverCurrent ? "true" : "false",
                      tracking->faults.dischargeOverCurrent ? "true" : "false",
                      tracking->chargeGateFaultSignal ? "true" : "false",

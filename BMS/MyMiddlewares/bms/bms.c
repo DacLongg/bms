@@ -248,6 +248,7 @@ static void BMS_ResetTracking(void)
 static void BMS_ConfigureMonitor(void)
 {
     uint32_t over_current_sense_mV;
+    uint32_t over_current_chargr_mV;
     uint8_t config_ok = 1U;
 
     BMS_LOG_INFO("configure bq76952");
@@ -329,12 +330,13 @@ static void BMS_ConfigureMonitor(void)
                                       BMS_BALANCE_INTERVAL_SEC,
                                       BMS_BALANCE_MAX_ACTIVE_CELLS));
 
-    over_current_sense_mV = (((uint32_t)BMS_OVER_CURRENT_MA * BMS_BQ_SENSE_RESISTOR_UOHM) + 500000UL) / 1000000UL;
+    over_current_sense_mV = (((uint32_t)BMS_OVER_CURRENT_DISCHARGE * BMS_BQ_SENSE_RESISTOR_UOHM) + 500000UL) / 1000000UL;
+    over_current_chargr_mV = (((uint32_t)BMS_OVER_CURRENT_CHARGE * BMS_BQ_SENSE_RESISTOR_UOHM) + 500000UL) / 1000000UL;
     if (over_current_sense_mV < 4UL) {
         over_current_sense_mV = 4UL;
     }
     BMS_BQ_CONFIG_STEP(config_ok, bq76952_setChargingOvercurrentProtection(
-                                      (unsigned int)over_current_sense_mV,
+                                      (unsigned int)over_current_chargr_mV,
                                       50U));
     BMS_BQ_CONFIG_STEP(config_ok, bq76952_setDischargingOvercurrentProtection(
                                       (unsigned int)over_current_sense_mV,
@@ -611,10 +613,14 @@ static void BMS_UpdateFaultFlags(BMS_Tracking_t *tracking)
     if (abs_current >= BMS_SHORT_CIRCUIT_MA) {
         tracking->faults.shortCircuit = true;
     }
-    if (abs_current >= BMS_OVER_CURRENT_MA) {
+    if(abs_current >= BMS_OVER_CURRENT_CHARGE)
+    {
         if (tracking->currentDirection == BMS_CURRENT_CHARGE) {
             tracking->faults.chargeOverCurrent = true;
-        } else if (tracking->currentDirection == BMS_CURRENT_DISCHARGE) {
+        }
+    }
+    if (abs_current >= BMS_OVER_CURRENT_DISCHARGE) {
+        if (tracking->currentDirection == BMS_CURRENT_DISCHARGE) {
             tracking->faults.dischargeOverCurrent = true;
         }
     } else if (abs_current <= BMS_CURRENT_DEADBAND_MA) {
