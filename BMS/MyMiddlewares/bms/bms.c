@@ -46,6 +46,10 @@ static uint32_t g_last_alert_service_tick;
 static uint32_t g_last_bat_adc_sample_tick;
 static bool g_shutdown_pulse_active;
 static uint32_t g_shutdown_pulse_tick;
+static bool g_charge_oc_recovery_pending;
+static bool g_discharge_oc_recovery_pending;
+static uint32_t g_charge_oc_recovery_tick;
+static uint32_t g_discharge_oc_recovery_tick;
 
 static void BMS_ResetTracking(void);
 static void BMS_ConfigureMonitor(void);
@@ -58,7 +62,7 @@ static void BMS_SetBatSenseEnable(bool enabled);
 static void BMS_UpdateCellStatistics(BMS_Tracking_t *tracking);
 static void BMS_UpdateCurrentDirection(BMS_Tracking_t *tracking);
 static void BMS_UpdateFetStatus(BMS_Tracking_t *tracking);
-static void BMS_UpdateFaultFlags(BMS_Tracking_t *tracking);
+static void BMS_UpdateFaultFlags(BMS_Tracking_t *tracking, uint32_t now);
 static void BMS_MergeBQFaultFlags(BMS_Tracking_t *tracking);
 static void BMS_UpdateState(BMS_Tracking_t *tracking);
 static void BMS_ApplyFetPolicy(BMS_Tracking_t *tracking);
@@ -125,7 +129,7 @@ void BMS_Update(void)
     BMS_UpdateBatteryAdc(&g_bms_tracking, now);
     BMS_UpdateCellStatistics(&g_bms_tracking); // Cập nhật min/max/average/delta cell voltage và stack voltage
     BMS_UpdateCurrentDirection(&g_bms_tracking); // Cập nhật chiều dòng điện dựa trên giá trị current_mA
-    BMS_UpdateFaultFlags(&g_bms_tracking); // Cập nhật các cờ lỗi dựa trên ngưỡng điện áp, nhiệt độ, dòng điện
+    BMS_UpdateFaultFlags(&g_bms_tracking, now); // Cập nhật các cờ lỗi dựa trên ngưỡng điện áp, nhiệt độ, dòng điện
     BMS_MergeBQFaultFlags(&g_bms_tracking); // Kết hợp các cờ lỗi từ BQ76952 vào tracking
     BMS_UpdateCoulombCounter(&g_bms_tracking, dt_ms); // Cập nhật tích trữ mAs và throughput mAh dựa trên current và dt
     BMS_UpdateState(&g_bms_tracking); // Cập nhật trạng thái BMS dựa trên các cờ lỗi và điều kiện hoạt động
@@ -364,6 +368,10 @@ static void BMS_ConfigureHardwarePins(void)
     g_ddsg_signal_active = (HAL_GPIO_ReadPin(DDSG_GPIO_Port, DDSG_Pin) == GPIO_PIN_SET);
     g_shutdown_pulse_active = false;
     g_shutdown_pulse_tick = 0UL;
+    g_charge_oc_recovery_pending = false;
+    g_discharge_oc_recovery_pending = false;
+    g_charge_oc_recovery_tick = 0UL;
+    g_discharge_oc_recovery_tick = 0UL;
 }
 
 static void BMS_SetFetoff(bool asserted)
@@ -557,7 +565,7 @@ static void BMS_UpdateFetStatus(BMS_Tracking_t *tracking)
     tracking->fetsEnabled = bq76952_areFETs_Enabled();
 }
 
-static void BMS_UpdateFaultFlags(BMS_Tracking_t *tracking)
+static void BMS_UpdateFaultFlags(BMS_Tracking_t *tracking, uint32_t now)
 {
     int32_t abs_current;
 
@@ -617,15 +625,41 @@ static void BMS_UpdateFaultFlags(BMS_Tracking_t *tracking)
     {
         if (tracking->currentDirection == BMS_CURRENT_CHARGE) {
             tracking->faults.chargeOverCurrent = true;
+            g_charge_oc_recovery_pending = false;
         }
     }
     if (abs_current >= BMS_OVER_CURRENT_DISCHARGE) {
         if (tracking->currentDirection == BMS_CURRENT_DISCHARGE) {
             tracking->faults.dischargeOverCurrent = true;
+            g_discharge_oc_recovery_pending = false;
         }
     } else if (abs_current <= BMS_CURRENT_DEADBAND_MA) {
-        tracking->faults.chargeOverCurrent = false;
-        tracking->faults.dischargeOverCurrent = false;
+        if (tracking->faults.chargeOverCurrent) {
+            if (!g_charge_oc_recovery_pending) {
+                g_charge_oc_recovery_pending = true;
+                g_charge_oc_recovery_tick = now;
+            } else if ((now - g_charge_oc_recovery_tick) >= BMS_OVER_CURRENT_RECOVERY_DELAY_MS) {
+                tracking->faults.chargeOverCurrent = false;
+                g_charge_oc_recovery_pending = false;
+            }
+        } else {
+            g_charge_oc_recovery_pending = false;
+        }
+
+        if (tracking->faults.dischargeOverCurrent) {
+            if (!g_discharge_oc_recovery_pending) {
+                g_discharge_oc_recovery_pending = true;
+                g_discharge_oc_recovery_tick = now;
+            } else if ((now - g_discharge_oc_recovery_tick) >= BMS_OVER_CURRENT_RECOVERY_DELAY_MS) {
+                tracking->faults.dischargeOverCurrent = false;
+                g_discharge_oc_recovery_pending = false;
+            }
+        } else {
+            g_discharge_oc_recovery_pending = false;
+        }
+    } else {
+        g_charge_oc_recovery_pending = false;
+        g_discharge_oc_recovery_pending = false;
     }
 }
 
