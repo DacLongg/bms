@@ -15,8 +15,14 @@
 #define BMS_CELL_UV_RECOVER_MV                      3600U
 
 #define BMS_BALANCE_DELTA_MV                        30U
+#define BMS_BALANCE_DELTA_MV_RECOVERY               20U
 #define BMS_BALANCE_MIN_CELL_MV                     3800U
 #define BMS_BALANCE_REFRESH_MS                      1000U
+#define BMS_BALANCE_MIN_TEMP_C                      5
+#define BMS_BALANCE_MAX_TEMP_C                      45
+#define BMS_BALANCE_MAX_INTERNAL_TEMP_C             70
+#define BMS_BALANCE_INTERVAL_SEC                    20U
+#define BMS_BALANCE_MAX_ACTIVE_CELLS                1U
 
 #define BMS_CURRENT_DEADBAND_MA                     300L
 #define BMS_OVER_CURRENT_MA                         75000L
@@ -127,7 +133,7 @@ bool BMS_IsFaultActive(void);
 void BMS_Error_Handler(void);
 void BMS_NotifyAlertInterrupt(void);
 void BMS_RequestShutdown(void);
-void BMS_Set_5V_Output(bool enabled);
+bool BMS_Set_5V_Output(bool enabled);
 
 const char *BMS_StateName(BMS_State_t state);
 

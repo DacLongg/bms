@@ -1,36 +1,44 @@
-# BMS Sleep Strategy (STM32 low-power sleep + BQ deep-sleep)
+# BMS Sleep Strategy (STM32 low-power sleep + BQ sleep)
 
-## Điều kiện vào ngủ
-Pack chỉ vào ngủ khi đồng thời:
+## Dieu kien vao ngu
+
+Pack chi vao ngu khi dong thoi:
+
 - `tracking->state == BMS_STATE_NORMAL`
-- không có fault (`BMS_IsFaultActive() == false`)
-- không cần cân bằng (`balanceRequired == false` và `balanceMask == 0`)
-- không sạc/xả (`currentDirection == IDLE`, `charging == false`, `discharging == false`)
-- BQ cho phép sleep (`bqSleepAllowed == true`)
-- không có activity sạc/xả trong `X` phút (mặc định `5` phút)
+- khong co fault (`BMS_IsFaultActive() == false`)
+- khong can can bang (`balanceRequired == false` va `balanceMask == 0`)
+- khong sac/xa (`currentDirection == IDLE`, `charging == false`, `discharging == false`)
+- BQ cho phep sleep (`bqSleepAllowed == true`)
+- khong co activity sac/xa trong `MAINAPP_IDLE_BEFORE_SLEEP_MINUTES` phut, hien tai la `1` phut
 
 ## Chu kỳ ngủ/thức
 - MCU dùng `power_manager_enter_low_power_sleep(Y_ms)` với `Y` giờ (mặc định `2` giờ).
 - Wake source:
-  - `RTC`: wake định kỳ để kiểm tra lại pack.
-  - `GPIO`: wake ngay khi có hoạt động phần cứng (`ALERT/DCHG/DDSG` EXTI).
+  - `RTC`: wake dinh ky de kiem tra lai pack.
+  - `GPIO`: wake ngay khi co hoat dong phan cung da noi vao EXTI (`ALERT/DCHG/DDSG`).
+  - `UART`: wake khi host giao tiep.
 
-## Hành vi sau wake
-- Wake bởi `RTC`:
-  - cập nhật BMS ngay.
-  - nếu pack vẫn OK và không cần cân bằng -> ngủ lại ngay (không cần chờ lại X phút).
-  - nếu có fault/cần cân bằng -> xử lý bình thường; khi điều kiện OK trở lại thì ngủ lại.
-- Wake bởi `GPIO` (cắm tải xả hoặc cắm sạc):
-  - hủy cơ chế ngủ lại ngay.
-  - yêu cầu khoảng im lặng lại X phút trước khi ngủ.
+## Hanh vi sau wake
 
-## Liên quan BQ deep-sleep
-- Cơ chế này dùng trạng thái runtime `bqSleepAllowed`/`bqSleepMode` từ `BatteryStatus` của BQ để đồng bộ quyết định ngủ.
-- BQ sẽ tự vào deep-sleep khi điều kiện nội bộ thỏa (current thấp, không active state ngăn sleep).
+- Wake boi `RTC`:
+  - cap nhat BMS ngay.
+  - neu co dong sac/xa thi huy co che ngu lai ngay va reset moc idle.
+  - neu pack van OK, khong co dong va khong can can bang thi co the ngu lai ngay.
+- Wake boi `GPIO` hoac `UART`:
+  - huy co che ngu lai ngay.
+  - yeu cau khoang im lang lai `MAINAPP_IDLE_BEFORE_SLEEP_MINUTES` phut truoc khi ngu.
 
-## Tham số chính
-- `MAINAPP_IDLE_BEFORE_SLEEP_MINUTES` (X)
-- `MAINAPP_SLEEP_WAKEUP_HOURS` (Y)
-- `MAINAPP_BMS_UPDATE_MS` (chu kỳ update khi awake)
+## Lien quan BQ sleep
 
-Vị trí code: `BMS/App/mainapp.c`
+- Theo TRM BQ76952, BQ co the tu thoat Sleep khi current vuot nguong `Power:Sleep:Wake Comparator Current`.
+- Viec BQ tu thoat Sleep theo dong khong dong nghia MCU se tu thuc. MCU chi thuc neu co tin hieu wake duoc noi vao EXTI, RTC wake, hoac UART wake.
+- Firmware hien dung RTC wake 5 giay de poll lai BQ/current, tranh truong hop cam tai xa nhung khong co canh GPIO lam MCU thuc ngay.
+- Sau khi wake, firmware goi `bq76952_resumeFromSleep()` de gui `SLEEP_DISABLE` va apply lai REG1/REG2.
+
+## Tham so chinh
+
+- `MAINAPP_IDLE_BEFORE_SLEEP_MINUTES` (hien tai `1`)
+- `MAINAPP_SLEEP_WAKEUP_SECONDS` (hien tai `5`)
+- `MAINAPP_BMS_UPDATE_MS` (chu ky update khi awake)
+
+Vi tri code: `BMS/App/mainapp.c`

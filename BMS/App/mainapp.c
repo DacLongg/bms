@@ -94,9 +94,6 @@ static bool MainApp_IsPackSleepEligible(const BMS_Tracking_t *tracking)
     if (BMS_IsFaultActive()) {
         return false;
     }
-    if (tracking->balanceRequired || (tracking->balanceMask != 0U)) {
-        return false;
-    }
     if (tracking->currentDirection != BMS_CURRENT_IDLE) {
         return false;
     }
@@ -164,6 +161,7 @@ void mainapp(void)
             BMS_LOG_INFO("sleep enter bq_sleep=%u idle_ms=%lu",
                          tracking->bqSleepMode ? 1U : 0U,
                          (unsigned long)(now - last_activity_tick));
+            (void)bq76952_clearAlertStatusRegister(0xFFFFU);
             bq76952_prepareSleepWithReg2();
             Disable_Power_Battery();
             sleep_rc = power_manager_enter_low_power_sleep(MAINAPP_SLEEP_WAKEUP_MS);
@@ -198,7 +196,10 @@ void mainapp(void)
                 BMS_LOG_WARN("wake unknown");
             }
         }
-        BMS_LOG_INFO("update done state=%s chgDis=%s dchDis=%s faults:Ov:%s, Uv:%s,Ot:%s,Dt:%s,Ut:%s,Occ:%s,Dcc:%s,CGF:%s,DGF:%s,SC:%s,BQF:%s,Commu:%s",
+        BMS_LOG_INFO("update done state=%s chgDis=%s dchDis=%s \n faults:Ov:%s, Uv:%s,\n \
+                                                                        Ot:%s,Dt:%s,Ut:%s,\n \
+                                                                        Occ:%s,Dcc:%s,\n\
+                                                                        CGF:%s,DGF:%s,SC:%s,BQF:%s,Commu:%s",
                      BMS_StateName(tracking->state),
                      tracking->chargeDisabled ? "true" : "false",
                      tracking->dischargeDisabled ? "true" : "false",

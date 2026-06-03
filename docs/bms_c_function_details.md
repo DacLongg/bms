@@ -61,7 +61,7 @@ Tài liệu này mô tả cách hoạt động của tất cả hàm trong file 
 4. Set state về `BMS_STATE_FAULT`.
 5. Tắt cân bằng (`balanceMask = 0`, `balanceRequired = false`).
 6. Gửi lệnh xuống BQ:
-- `bq76952_setCellBalanceMask(0U)` để tắt balancing.
+- Cell balancing is autonomous in BQ; MCU no longer clears balancing with `CB_ACTIVE_CELLS`.
 - `bq76952_setFET(ALL, OFF)` để tắt cả CHG/DCH FET.
 - Ý nghĩa: Fail-safe cứng, ưu tiên an toàn pin.
 
@@ -206,6 +206,9 @@ Tài liệu này mô tả cách hoạt động của tất cả hàm trong file 
 - Mục đích: Tạo `balanceMask` và gửi xuống BQ để cân bằng cell.
 - Điều kiện bật balancing:
 - `deltaCellVoltage >= BMS_BALANCE_DELTA_MV`.
+- Điều kiện duy trì balancing:
+- Khi `balanceRequired == true`, chỉ clear khi `deltaCellVoltage < BMS_BALANCE_DELTA_MV_RECOVERY`.
+- Vùng 20..29 mV là hysteresis: không bật mới nếu đang tắt, nhưng vẫn duy trì nếu đã bật.
 - Chỉ chạy lại theo chu kỳ `BMS_BALANCE_REFRESH_MS` (1s).
 - Điều kiện buộc tắt balancing:
 - State khác `BMS_STATE_NORMAL`.
@@ -214,12 +217,12 @@ Tài liệu này mô tả cách hoạt động của tất cả hàm trong file 
 - Khi đó gửi mask = 0.
 - Logic chọn cell:
 1. Bỏ qua cell thấp hơn `BMS_BALANCE_MIN_CELL_MV`.
-2. Bỏ qua cell thấp xa max (điều kiện `(cell + delta) <= max`).
-3. Chọn cell nếu `cell >= min + delta`.
+2. Bỏ qua cell thấp xa max (điều kiện `(cell + BMS_BALANCE_DELTA_MV_RECOVERY) <= max`).
+3. Chọn cell nếu `cell >= min + BMS_BALANCE_DELTA_MV_RECOVERY`.
 4. Chặn chọn 2 cell liền kề bằng `previous_selected`.
 - Cập nhật:
 - `tracking->balanceMask = requested_mask`.
-- Gửi `bq76952_setCellBalanceMask(requested_mask)`.
+- `balanceMask` is read from BQ `CB_ACTIVE_CELLS (0x0083)`; MCU no longer writes a requested mask.
 - Ghi log khi mask thay đổi.
 - Ý nghĩa: Cân bằng có điều kiện, tránh ảnh hưởng khi pack đang xả hoặc có lỗi.
 

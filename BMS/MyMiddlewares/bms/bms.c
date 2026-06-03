@@ -26,13 +26,17 @@
 #define BMS_BAT_ADC_CAL_NUM 955UL
 #define BMS_BAT_ADC_CAL_DEN 1000UL
 
+#define BMS_BQ_CONFIG_STEP(ok_var, expr) \
+    do { \
+        (ok_var) &= (uint8_t)(expr); \
+    } while (0)
+
 static BMS_Tracking_t g_bms_tracking;
 static uint32_t g_last_update_tick;
-static uint32_t g_last_balance_tick;
+
 static uint32_t g_last_flash_save_tick;
 static uint32_t g_last_saved_charge_mAh;
 static uint32_t g_last_saved_discharge_mAh;
-static BMS_State_t g_last_logged_state = BMS_STATE_INIT;
 static uint16_t g_last_logged_balance_mask;
 static volatile bool g_alert_irq_pending;
 static volatile uint32_t g_alert_irq_counter;
@@ -49,7 +53,6 @@ static void BMS_ConfigureHardwarePins(void);
 static void BMS_ReadMeasurements(BMS_Tracking_t *tracking);
 static void BMS_HandleHardwareSignals(BMS_Tracking_t *tracking, uint32_t now);
 static void BMS_UpdateBatteryAdc(BMS_Tracking_t *tracking, uint32_t now);
-static void BMS_UpdateShutdownPulse(uint32_t now);
 static void BMS_SetFetoff(bool asserted);
 static void BMS_SetBatSenseEnable(bool enabled);
 static void BMS_UpdateCellStatistics(BMS_Tracking_t *tracking);
@@ -91,7 +94,6 @@ void BMS_Init(void)
     BMS_LoadPersistedData(&g_bms_tracking);
     BMS_ConfigureMonitor();
     g_last_update_tick = HAL_GetTick();
-    g_last_balance_tick = g_last_update_tick;
     g_last_flash_save_tick = g_last_update_tick;
     g_last_alert_service_tick = g_last_update_tick;
     g_last_bat_adc_sample_tick = g_last_update_tick;
@@ -108,7 +110,7 @@ void BMS_Update(void)
         dt_ms = 1U;
     }
     g_last_update_tick = now;
-    BMS_UpdateShutdownPulse(now);
+    // BMS_UpdateShutdownPulse(now); // tạm thời k dùng chế độ shutdown
 
     g_bms_tracking.connected = bq76952_isConnected();
     if (!g_bms_tracking.connected) {
@@ -170,7 +172,6 @@ void BMS_Error_Handler(void)
     g_bms_tracking.balanceRequired = false;
     g_bms_tracking.fetOffAsserted = true;
     g_bms_tracking.batSenseEnabled = false;
-    bq76952_setCellBalanceMask(0U);
     bq76952_setFET(ALL, OFF);
     BMS_SetFetoff(true);
     BMS_SetBatSenseEnable(false);
@@ -247,26 +248,27 @@ static void BMS_ResetTracking(void)
 static void BMS_ConfigureMonitor(void)
 {
     uint32_t over_current_sense_mV;
+    uint8_t config_ok = 1U;
 
     BMS_LOG_INFO("configure bq76952");
-    bq76952_configurePowerOutputs();
-    bq76952_setVcellMode(BMS_BQ_VCELL_MODE_10S);
-    bq76952_setDA_Config();
-    bq76952_setCurrentSenseCalibration();
-    bq76952_setEnableProtectionsA();
-    bq76952_setEnableProtectionsB();
-    bq76952_setEnableProtectionsC();
-    bq76952_setProtectionConfiguration();
-    bq76952_setEnableCHG_FET_Protection();
-    bq76952_setDSGFETProtectionsA();
-    bq76952_setDSGFETProtectionsB();
-    bq76952_setDSGFETProtectionsC();
-    bq76952_setFET_Options();
-    bq76952_setFET_PredischargeTimeout();
-    bq76952_setFET_PredischargeStopDelta();
-    bq76952_setCellInterconnectResistances();
-    bq76952_setEnableTS1();
-    bq76952_setEnableTS3();
+    BMS_BQ_CONFIG_STEP(config_ok, bq76952_configurePowerOutputs());
+    BMS_BQ_CONFIG_STEP(config_ok, bq76952_setVcellMode(BMS_BQ_VCELL_MODE_10S));
+    BMS_BQ_CONFIG_STEP(config_ok, bq76952_setDA_Config());
+    BMS_BQ_CONFIG_STEP(config_ok, bq76952_setCurrentSenseCalibration());
+    BMS_BQ_CONFIG_STEP(config_ok, bq76952_setEnableProtectionsA());
+    BMS_BQ_CONFIG_STEP(config_ok, bq76952_setEnableProtectionsB());
+    BMS_BQ_CONFIG_STEP(config_ok, bq76952_setEnableProtectionsC());
+    BMS_BQ_CONFIG_STEP(config_ok, bq76952_setProtectionConfiguration());
+    BMS_BQ_CONFIG_STEP(config_ok, bq76952_setEnableCHG_FET_Protection());
+    BMS_BQ_CONFIG_STEP(config_ok, bq76952_setDSGFETProtectionsA());
+    BMS_BQ_CONFIG_STEP(config_ok, bq76952_setDSGFETProtectionsB());
+    BMS_BQ_CONFIG_STEP(config_ok, bq76952_setDSGFETProtectionsC());
+    BMS_BQ_CONFIG_STEP(config_ok, bq76952_setFET_Options());
+    BMS_BQ_CONFIG_STEP(config_ok, bq76952_setFET_PredischargeTimeout());
+    BMS_BQ_CONFIG_STEP(config_ok, bq76952_setFET_PredischargeStopDelta());
+    BMS_BQ_CONFIG_STEP(config_ok, bq76952_setCellInterconnectResistances());
+    BMS_BQ_CONFIG_STEP(config_ok, bq76952_setEnableTS1());
+    BMS_BQ_CONFIG_STEP(config_ok, bq76952_setEnableTS3());
 #if BMS_DEBUG_LOG_ENABLE
     {
         bq76952_write_verify_t verify;
@@ -291,42 +293,62 @@ static void BMS_ConfigureMonitor(void)
         BMS_LOG_INFO("bq ts cfg ts1=0x%02x ts3=0x%02x", ts1_cfg, ts3_cfg);
     }
 #endif
-    bq76952_setAlertPinConfig();
-    bq76952_setDFETOFFPinConfig(true, false);
-    bq76952_setDCHGPinConfig(false);
-    bq76952_setDDSGPinConfig(false);
-    bq76952_setDefaultAlarmMaskConfig();
-    bq76952_setSF_AlertMask_A();
-    bq76952_setSF_AlertMask_B();
-    bq76952_setSF_AlertMask_C();
-    bq76952_setCellOvervoltageProtection(BMS_CELL_OV_CUTOFF_MV, BMS_BQ_PROTECTION_DELAY_MS);
-    bq76952_setCellUndervoltageProtection(BMS_CELL_UV_CUTOFF_MV, BMS_BQ_PROTECTION_DELAY_MS);
-    bq76952_setChargingTemperatureMaxLimit(BMS_CHARGE_OT_CUTOFF_C,
-                                           BMS_BQ_TEMPERATURE_PROTECTION_DELAY_SEC);
-    bq76952_setDischargingTemperatureMaxLimit(BMS_DISCHARGE_OT_CUTOFF_C,
-                                              BMS_BQ_TEMPERATURE_PROTECTION_DELAY_SEC);
-    bq76952_setChargingTemperatureMinLimit(BMS_UNDERTEMP_CUTOFF_C,
-                                           BMS_UNDERTEMP_RECOVER_C,
-                                           BMS_BQ_TEMPERATURE_PROTECTION_DELAY_SEC);
-    bq76952_setDischargingTemperatureMinLimit(BMS_UNDERTEMP_CUTOFF_C,
-                                              BMS_UNDERTEMP_RECOVER_C,
-                                              BMS_BQ_TEMPERATURE_PROTECTION_DELAY_SEC);
-    bq76952_setCellBalancingEnabled(true);
+    BMS_BQ_CONFIG_STEP(config_ok, bq76952_setAlertPinConfig());
+    BMS_BQ_CONFIG_STEP(config_ok, bq76952_setDFETOFFPinConfig(true, false));
+    BMS_BQ_CONFIG_STEP(config_ok, bq76952_setDCHGPinConfig(false));
+    BMS_BQ_CONFIG_STEP(config_ok, bq76952_setDDSGPinConfig(false));
+    BMS_BQ_CONFIG_STEP(config_ok, bq76952_setDefaultAlarmMaskConfig());
+    BMS_BQ_CONFIG_STEP(config_ok, bq76952_setSF_AlertMask_A());
+    BMS_BQ_CONFIG_STEP(config_ok, bq76952_setSF_AlertMask_B());
+    BMS_BQ_CONFIG_STEP(config_ok, bq76952_setSF_AlertMask_C());
+    BMS_BQ_CONFIG_STEP(config_ok, bq76952_setCellOvervoltageProtection(BMS_CELL_OV_CUTOFF_MV,
+                                                                       BMS_BQ_PROTECTION_DELAY_MS));
+    BMS_BQ_CONFIG_STEP(config_ok, bq76952_setCellUndervoltageProtection(BMS_CELL_UV_CUTOFF_MV,
+                                                                        BMS_BQ_PROTECTION_DELAY_MS));
+    BMS_BQ_CONFIG_STEP(config_ok, bq76952_setChargingTemperatureMaxLimit(
+                                      BMS_CHARGE_OT_CUTOFF_C,
+                                      BMS_BQ_TEMPERATURE_PROTECTION_DELAY_SEC));
+    BMS_BQ_CONFIG_STEP(config_ok, bq76952_setDischargingTemperatureMaxLimit(
+                                      BMS_DISCHARGE_OT_CUTOFF_C,
+                                      BMS_BQ_TEMPERATURE_PROTECTION_DELAY_SEC));
+    BMS_BQ_CONFIG_STEP(config_ok, bq76952_setChargingTemperatureMinLimit(
+                                      BMS_UNDERTEMP_CUTOFF_C,
+                                      BMS_UNDERTEMP_RECOVER_C,
+                                      BMS_BQ_TEMPERATURE_PROTECTION_DELAY_SEC));
+    BMS_BQ_CONFIG_STEP(config_ok, bq76952_setDischargingTemperatureMinLimit(
+                                      BMS_UNDERTEMP_CUTOFF_C,
+                                      BMS_UNDERTEMP_RECOVER_C,
+                                      BMS_BQ_TEMPERATURE_PROTECTION_DELAY_SEC));
+    BMS_BQ_CONFIG_STEP(config_ok, bq76952_configureAutonomousCellBalancing(
+                                      BMS_BALANCE_MIN_CELL_MV,
+                                      BMS_BALANCE_DELTA_MV,
+                                      BMS_BALANCE_DELTA_MV_RECOVERY,
+                                      BMS_BALANCE_MIN_TEMP_C,
+                                      BMS_BALANCE_MAX_TEMP_C,
+                                      BMS_BALANCE_MAX_INTERNAL_TEMP_C,
+                                      BMS_BALANCE_INTERVAL_SEC,
+                                      BMS_BALANCE_MAX_ACTIVE_CELLS));
 
     over_current_sense_mV = (((uint32_t)BMS_OVER_CURRENT_MA * BMS_BQ_SENSE_RESISTOR_UOHM) + 500000UL) / 1000000UL;
     if (over_current_sense_mV < 4UL) {
         over_current_sense_mV = 4UL;
     }
-    bq76952_setChargingOvercurrentProtection((unsigned int)over_current_sense_mV, 50U);
-    bq76952_setDischargingOvercurrentProtection((unsigned int)over_current_sense_mV, 50U);
-    bq76952_setDischargingShortcircuitProtection(SCD_60, 30U);
+    BMS_BQ_CONFIG_STEP(config_ok, bq76952_setChargingOvercurrentProtection(
+                                      (unsigned int)over_current_sense_mV,
+                                      50U));
+    BMS_BQ_CONFIG_STEP(config_ok, bq76952_setDischargingOvercurrentProtection(
+                                      (unsigned int)over_current_sense_mV,
+                                      50U));
+    BMS_BQ_CONFIG_STEP(config_ok, bq76952_setDischargingShortcircuitProtection(SCD_60, 30U));
 
     if (!bq76952_areFETs_Enabled()) {
         bq76952_setFET_ENABLE();
     }
-    bq76952_setCellBalanceMask(0U);
     bq76952_setFET(ALL, ON);
-    BMS_LOG_INFO("bq configured oc=%lu mV", (unsigned long)over_current_sense_mV);
+    g_bms_tracking.faults.communicationFault = (config_ok == 0U);
+    BMS_LOG_INFO("bq configured oc=%lu mV ok=%u",
+                 (unsigned long)over_current_sense_mV,
+                 (unsigned int)config_ok);
 }
 
 static void BMS_ConfigureHardwarePins(void)
@@ -340,19 +362,6 @@ static void BMS_ConfigureHardwarePins(void)
     g_ddsg_signal_active = (HAL_GPIO_ReadPin(DDSG_GPIO_Port, DDSG_Pin) == GPIO_PIN_SET);
     g_shutdown_pulse_active = false;
     g_shutdown_pulse_tick = 0UL;
-}
-
-static void BMS_UpdateShutdownPulse(uint32_t now)
-{
-    if (!g_shutdown_pulse_active) {
-        return;
-    }
-    if ((now - g_shutdown_pulse_tick) < BMS_SHUT_HOLD_MS) {
-        return;
-    }
-    HAL_GPIO_WritePin(SHUT_GPIO_Port, SHUT_Pin, GPIO_PIN_RESET);
-    g_shutdown_pulse_active = false;
-    BMS_LOG_WARN("shutdown pulse done");
 }
 
 static void BMS_SetFetoff(bool asserted)
@@ -371,6 +380,7 @@ static void BMS_HandleHardwareSignals(BMS_Tracking_t *tracking, uint32_t now)
 {
     bool should_service_alert;
     bool alert_signal_active;
+    unsigned int alarm_status;
 
     if (tracking == NULL) {
         return;
@@ -397,7 +407,9 @@ static void BMS_HandleHardwareSignals(BMS_Tracking_t *tracking, uint32_t now)
     g_alert_irq_pending = false;
     g_last_alert_service_tick = now;
     tracking->alertCounter = g_alert_irq_counter;
-    tracking->alertActive = alert_signal_active || (bq76952_getAlertStatusRegister() != 0U);
+    alarm_status = bq76952_getAlertStatusRegister();
+    tracking->alertActive = alert_signal_active || (alarm_status != 0U);
+    (void)bq76952_clearAlertStatusRegister((uint16_t)alarm_status);
     (void)bq76952_getAlertRawStatusRegister();
 }
 
@@ -465,8 +477,8 @@ static void BMS_ReadMeasurements(BMS_Tracking_t *tracking)
 
     tracking->stackVoltage = 0U;
     tracking->current_mA = (int32_t)bq76952_getCurrentAvg();
-    tracking->temperature[0] = (int16_t)bq76952_getThermistorTemp(TS1);
-    tracking->temperature[1] = (int16_t)bq76952_getThermistorTemp(TS3);
+    tracking->temperature[0] = bq76952_getThermistorTemp(TS1);
+    tracking->temperature[1] = bq76952_getThermistorTemp(TS3);
     BMS_UpdateFetStatus(tracking);
     batt_status = bq76952_getBatteryStatusRegister();
     tracking->bqSleepMode = batt_status.bits.SLEEP_MODE != 0U;
@@ -674,25 +686,6 @@ static void BMS_UpdateState(BMS_Tracking_t *tracking)
         tracking->state = BMS_STATE_NORMAL;
     }
 
-    if (tracking->state != g_last_logged_state) {
-        BMS_LOG_WARN("state %s -> %s chg_dis=%u dch_dis=%u faults=0x%02lx",
-                     BMS_StateName(g_last_logged_state),
-                     BMS_StateName(tracking->state),
-                     tracking->chargeDisabled ? 1U : 0U,
-                     tracking->dischargeDisabled ? 1U : 0U,
-                     (unsigned long)(
-                         (tracking->faults.cellOverVoltage ? 0x001U : 0U) |
-                         (tracking->faults.cellUnderVoltage ? 0x002U : 0U) |
-                         (tracking->faults.chargeOverTemperature ? 0x004U : 0U) |
-                         (tracking->faults.dischargeOverTemperature ? 0x008U : 0U) |
-                         (tracking->faults.underTemperature ? 0x010U : 0U) |
-                         (tracking->faults.chargeOverCurrent ? 0x020U : 0U) |
-                         (tracking->faults.dischargeOverCurrent ? 0x040U : 0U) |
-                         (tracking->faults.shortCircuit ? 0x080U : 0U) |
-                         (tracking->faults.bqSafetyFault ? 0x100U : 0U) |
-                         (tracking->faults.communicationFault ? 0x200U : 0U)));
-        g_last_logged_state = tracking->state;
-    }
 }
 
 static void BMS_ApplyFetPolicy(BMS_Tracking_t *tracking)
@@ -774,63 +767,26 @@ static void BMS_UpdateCoulombCounter(BMS_Tracking_t *tracking, uint32_t dt_ms)
 
 static void BMS_UpdateBalancing(BMS_Tracking_t *tracking, uint32_t now)
 {
-    uint16_t requested_mask = 0U;
-    bool previous_selected = false;
+    static uint32_t g_last_balance_tick = 0U;
+    uint16_t active_mask;
 
     if (tracking == NULL) {
         return;
     }
-
-    tracking->balanceRequired = tracking->deltaCellVoltage >= BMS_BALANCE_DELTA_MV;
 
     if ((now - g_last_balance_tick) < BMS_BALANCE_REFRESH_MS) {
         return;
     }
     g_last_balance_tick = now;
 
-    if (tracking->state != BMS_STATE_NORMAL ||
-        !tracking->balanceRequired ||
-        tracking->currentDirection == BMS_CURRENT_DISCHARGE) {
-        tracking->balanceMask = 0U;
-        bq76952_setCellBalanceMask(0U);
-        if (g_last_logged_balance_mask != 0U) {
-            BMS_LOG_INFO("balance off");
-            g_last_logged_balance_mask = 0U;
-        }
-        return;
-    }
+    active_mask = (uint16_t)(bq76952_getCellBalanceActiveMask() &
+                             (uint16_t)((1UL << BMS_NUMBER_OF_CELLS) - 1UL));
 
-    for (uint8_t i = 0U; i < BMS_NUMBER_OF_CELLS; ++i) {
-        bool select_cell = false;
-
-        if (tracking->cellVoltages[i] < BMS_BALANCE_MIN_CELL_MV) {
-            previous_selected = false;
-            continue;
-        }
-
-        if ((tracking->cellVoltages[i] + BMS_BALANCE_DELTA_MV) <= tracking->maxCellVoltage &&
-            tracking->cellVoltages[i] < tracking->maxCellVoltage) {
-            previous_selected = false;
-            continue;
-        }
-
-        if (tracking->cellVoltages[i] >= (uint16_t)(tracking->minCellVoltage + BMS_BALANCE_DELTA_MV)) {
-            select_cell = true;
-        }
-
-        if (select_cell && !previous_selected) {
-            requested_mask |= (uint16_t)(1U << i);
-            previous_selected = true;
-        } else {
-            previous_selected = false;
-        }
-    }
-
-    tracking->balanceMask = requested_mask;
-    bq76952_setCellBalanceMask(requested_mask);
-    if (requested_mask != g_last_logged_balance_mask) {
-        BMS_LOG_INFO("balance mask=0x%04x delta=%u", requested_mask, tracking->deltaCellVoltage);
-        g_last_logged_balance_mask = requested_mask;
+    tracking->balanceMask = active_mask;
+    tracking->balanceRequired = (active_mask != 0U);
+    if (active_mask != g_last_logged_balance_mask) {
+        BMS_LOG_INFO("balance active=0x%04x delta=%u", active_mask, tracking->deltaCellVoltage);
+        g_last_logged_balance_mask = active_mask;
     }
 }
 
@@ -979,11 +935,18 @@ static int32_t BMS_AbsCurrent(int32_t current_mA)
     return current_mA;
 }
 
-void BMS_Set_5V_Output(bool enabled)
+bool BMS_Set_5V_Output(bool enabled)
 {
+    bool ok;
+
     if (enabled) {
-        bq76952_setEnableRegulator(true, true); // enable 5V regulator in auto mode (enabled when either charge or discharge FET is on)
+        ok = bq76952_setEnableRegulator(true, true); // enable 5V regulator in auto mode (enabled when either charge or discharge FET is on)
     } else {
-        bq76952_setEnableRegulator(false, false); // disable 5V regulator
+        ok = bq76952_setEnableRegulator(false, false); // disable 5V regulator
     }
+
+    if (!ok) {
+        g_bms_tracking.faults.communicationFault = true;
+    }
+    return ok;
 }

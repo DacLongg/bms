@@ -23,16 +23,22 @@
 #define CMD_DIR_CC2_CUR             0x3AU
 #define CMD_DIR_ALARM_STATUS        0x62U
 #define CMD_DIR_ALARM_RAW_STATUS    0x64U
+#define CMD_DIR_ALARM_ENABLE        0x66U
 #define CMD_DIR_INT_TEMP            0x68U
 #define CMD_DIR_FET_STAT            0x7FU
 #define BQ_FET_STAT_CHG_FET         0x01U
 #define BQ_FET_STAT_DSG_FET         0x04U
+#define BQ_ALARM_MASK_WITH_WAKE     0xF801U
+#define BQ_CB_CONFIG_CHARGE         0x01U
+#define BQ_CB_CONFIG_RELAX          0x02U
+#define BQ_CB_CONFIG_SLEEP          0x04U
 
 #define CMD_DEVICE_NUMBER           0x0001U
 #define CMD_HW_VERSION              0x0003U
 #define CMD_STATIC_CFG_SIG          0x0005U
 #define CMD_COV_SNAPSHOT            0x0081U
 #define SUBCMD_CB_ACTIVE_CELLS      0x0083U
+#define SUBCMD_CBSTATUS1            0x0085U
 #define SUBCMD_SLEEP_ENABLE         0x0099U
 #define SUBCMD_SLEEP_DISABLE        0x009AU
 #define SUBCMD_REG12_CONTROL        0x0098U
@@ -93,6 +99,7 @@ static bq76952_write_verify_t g_last_write_verify;
 static bool bq76952_write_register(byte reg, const byte *data, uint16_t len);
 static bool bq76952_read_register(byte reg, byte *data, uint16_t len);
 static unsigned int bq76952_directCommand(byte command);
+static bool bq76952_writeDirectCommand(byte command, uint16_t data);
 static void bq76952_subCommand(unsigned int data);
 static void bq76952_subCommandWithU8Data(unsigned int command, byte data);
 static void bq76952_subCommandWithU16Data(unsigned int command, uint16_t data);
@@ -108,6 +115,7 @@ static bool bq76952_waitConfigUpdateMode(bool expected, uint32_t timeout_ms);
 static bool bq76952_writeDataMemoryPayload(unsigned int addr, int16_t data, byte noOfBytes);
 static bool bq76952_writeDataMemory(unsigned int addr, int16_t data, byte noOfBytes);
 static int16_t bq76952_clampTemperatureLimit(int temp, int fallback);
+static int16_t bq76952_deciKelvinToCelsius(uint16_t raw_deci_kelvin);
 static void bq76952_fillOTPStatusSnapshot(bq76952_otp_status_t *status);
 static bool bq76952_otpResultIsOk(uint8_t result);
 
@@ -139,6 +147,15 @@ static unsigned int bq76952_directCommand(byte command)
     }
 
     return (unsigned int)(((unsigned int)data[1] << 8) | data[0]);
+}
+
+static bool bq76952_writeDirectCommand(byte command, uint16_t data)
+{
+    byte payload[2];
+
+    payload[0] = LOW_BYTE(data);
+    payload[1] = HIGH_BYTE(data);
+    return bq76952_write_register(command, payload, 2U);
 }
 
 /* Gửi subcommand 16-bit vào cặp thanh ghi 0x3E/0x3F. */
@@ -392,6 +409,14 @@ static int16_t bq76952_clampTemperatureLimit(int temp, int fallback)
     return (int16_t)temp;
 }
 
+static int16_t bq76952_deciKelvinToCelsius(uint16_t raw_deci_kelvin)
+{
+    if (raw_deci_kelvin >= 2732U) {
+        return (int16_t)((raw_deci_kelvin - 2732U) / 10U);
+    }
+    return (int16_t)(-((int16_t)((2732U - raw_deci_kelvin + 9U) / 10U)));
+}
+
 /* Đọc 1 hoặc 2 byte data memory tại địa chỉ addr.
  * size nên là 1 hoặc 2; nếu 2 thì kết quả được ghép little-endian.
  */
@@ -640,9 +665,11 @@ bool bq76952_Enter_FullAccessMode(void)
 
 bool bq76952_configure_before_OTP_write(void)
 {
-    bq76952_setEnablePreRegulator();
-    bq76952_setEnableRegulator(true, true);
-    return true;
+    uint8_t status = 1U;
+
+    status &= (uint8_t)bq76952_setEnablePreRegulator();
+    status &= (uint8_t)bq76952_setEnableRegulator(true, true);
+    return status != 0U;
 }
 
 static bool bq76952_otpResultIsOk(uint8_t result)
@@ -671,7 +698,7 @@ static void bq76952_fillOTPStatusSnapshot(bq76952_otp_status_t *status)
     status->otpPending = BQ_READ_STATUS_BIT(battery_status_raw, 6U) != 0U;
     status->stackVoltage_mV = (uint16_t)bq76952_getStackVoltage();
     status->packVoltage_mV = (uint16_t)bq76952_getPackVoltage();
-    status->internalTemp_C = (int16_t)bq76952_getInternalTemp();
+    status->internalTemp_C = bq76952_getInternalTemp();
 
     bq76952_subCommand(CMD_STATIC_CFG_SIG);
     HAL_Delay(1U);
@@ -796,14 +823,13 @@ bool bq76952_program_OTP(void)
     return bq76952_program_OTP_with_status(&status);
 }
 
-float bq76952_getInternalTemp(void)
+int16_t bq76952_getInternalTemp(void)
 {
     /* BQ76952 trả nhiệt độ theo 0.1 Kelvin, cần đổi sang Celsius. */
-    float raw = (float)bq76952_directCommand(CMD_DIR_INT_TEMP) / 10.0f;
-    return raw - 273.15f;
+    return bq76952_deciKelvinToCelsius((uint16_t)bq76952_directCommand(CMD_DIR_INT_TEMP));
 }
 
-float bq76952_getThermistorTemp(bq76952_thermistor_t thermistor)
+int16_t bq76952_getThermistorTemp(bq76952_thermistor_t thermistor)
 {
     byte command = 0x70U;
 
@@ -831,7 +857,7 @@ float bq76952_getThermistorTemp(bq76952_thermistor_t thermistor)
         break;
     }
 
-    return ((float)bq76952_directCommand(command) / 10.0f) - 273.15f;
+    return bq76952_deciKelvinToCelsius((uint16_t)bq76952_directCommand(command));
 }
 
 bq76952_protection_t bq76952_getProtectionStatus(void)
@@ -926,10 +952,47 @@ bool bq76952_isDischargeFetOn(void)
     return (bq76952_getFetStatusRaw() & BQ_FET_STAT_DSG_FET) != 0U;
 }
 
-void bq76952_setCellBalancingEnabled(bool enabled)
+bool bq76952_setCellBalancingEnabled(bool enabled)
 {
-    /* 0x0C giữ CB_NO_CMD = 0 để host command 0x0083 được nhận, tắt autonomous CB_CHG/CB_RLX. */
-    bq76952_writeDataMemory(BALANCING_CONFIGURATION, enabled ? 0x0C : 0x10, 1U);
+    byte cfg = enabled ? (BQ_CB_CONFIG_CHARGE | BQ_CB_CONFIG_RELAX | BQ_CB_CONFIG_SLEEP) : 0U;
+
+    return bq76952_writeDataMemory(BALANCING_CONFIGURATION, cfg, 1U);
+}
+
+bool bq76952_configureAutonomousCellBalancing(uint16_t min_cell_mv,
+                                              uint8_t start_delta_mv,
+                                              uint8_t stop_delta_mv,
+                                              int8_t min_cell_temp_c,
+                                              int8_t max_cell_temp_c,
+                                              int8_t max_internal_temp_c,
+                                              uint8_t interval_s,
+                                              uint8_t max_cells)
+{
+    uint8_t status = 1U;
+    byte cfg = BQ_CB_CONFIG_CHARGE | BQ_CB_CONFIG_RELAX | BQ_CB_CONFIG_SLEEP;
+
+    if ((interval_s == 0U) || (max_cells > 16U) || (stop_delta_mv > start_delta_mv)) {
+        return false;
+    }
+
+    status &= (uint8_t)bq76952_writeDataMemory(BALANCING_CONFIGURATION, cfg, 1U);
+    status &= (uint8_t)bq76952_writeDataMemory(CELL_BALANCE_MIN_CELL_TEMP, min_cell_temp_c, 1U);
+    status &= (uint8_t)bq76952_writeDataMemory(CELL_BALANCE_MAX_CELL_TEMP, max_cell_temp_c, 1U);
+    status &= (uint8_t)bq76952_writeDataMemory(CELL_BALANCE_MAX_INTERNAL_TEMP, max_internal_temp_c, 1U);
+    status &= (uint8_t)bq76952_writeDataMemory(CELL_BALANCE_INTERVAL, interval_s, 1U);
+    status &= (uint8_t)bq76952_writeDataMemory(CELL_BALANCE_MAX_CELLS, max_cells, 1U);
+    status &= (uint8_t)bq76952_writeDataMemory(CELL_BALANCE_MIN_CELL_V_CHARGE,
+                                               (int16_t)min_cell_mv,
+                                               2U);
+    status &= (uint8_t)bq76952_writeDataMemory(CELL_BALANCE_MIN_DELTA_CHARGE, start_delta_mv, 1U);
+    status &= (uint8_t)bq76952_writeDataMemory(CELL_BALANCE_STOP_DELTA_CHARGE, stop_delta_mv, 1U);
+    status &= (uint8_t)bq76952_writeDataMemory(CELL_BALANCE_MIN_CELL_V_RELAX,
+                                               (int16_t)min_cell_mv,
+                                               2U);
+    status &= (uint8_t)bq76952_writeDataMemory(CELL_BALANCE_MIN_DELTA_RELAX, start_delta_mv, 1U);
+    status &= (uint8_t)bq76952_writeDataMemory(CELL_BALANCE_STOP_DELTA_RELAX, stop_delta_mv, 1U);
+
+    return status != 0U;
 }
 
 void bq76952_setCellBalanceMask(uint16_t logical_cell_mask)
@@ -952,13 +1015,21 @@ uint16_t bq76952_getCellBalanceActiveMask(void)
     return (uint16_t)bq76952_subCommandResponseInt(0U);
 }
 
-void bq76952_setCellOvervoltageProtection(unsigned int mv, unsigned int ms)
+uint16_t bq76952_getCellBalanceActiveSeconds(void)
+{
+    bq76952_subCommand(SUBCMD_CBSTATUS1);
+    HAL_Delay(1U);
+    return (uint16_t)bq76952_subCommandResponseInt(0U);
+}
+
+bool bq76952_setCellOvervoltageProtection(unsigned int mv, unsigned int ms)
 {
     /* Cell OV threshold trong data memory dùng bước ~50.6 mV/LSB.
      * Delay dùng bước ~3.3 ms và mã hóa theo công thức datasheet: code = time/3.3 - 2.
      */
-    byte thresh = (byte)(mv / 50.6f);
-    uint16_t dly = (uint16_t)(ms / 3.3f) - 2U;
+    byte thresh = (byte)(((uint32_t)mv * 10U) / 506U);
+    uint16_t dly = (uint16_t)(((uint32_t)ms * 10U) / 33U) - 2U;
+    uint8_t status = 1U;
 
     /* 86 ~ 4.35 V, 74 ~ khoảng 250 ms: đây là fallback an toàn của thư viện. */
     if (thresh < 20U || thresh > 110U) {
@@ -968,15 +1039,17 @@ void bq76952_setCellOvervoltageProtection(unsigned int mv, unsigned int ms)
         dly = 74U;
     }
 
-    bq76952_writeDataMemory(0x9278U, thresh, 1U);
-    bq76952_writeDataMemory(0x9279U, (int16_t)dly, 2U);
+    status &= (uint8_t)bq76952_writeDataMemory(0x9278U, thresh, 1U);
+    status &= (uint8_t)bq76952_writeDataMemory(0x9279U, (int16_t)dly, 2U);
+    return status != 0U;
 }
 
-void bq76952_setCellUndervoltageProtection(unsigned int mv, unsigned int ms)
+bool bq76952_setCellUndervoltageProtection(unsigned int mv, unsigned int ms)
 {
     /* UV cũng dùng bước ~50.6 mV/LSB và delay cùng công thức với OV. */
-    byte thresh = (byte)(mv / 50.6f);
-    uint16_t dly = (uint16_t)(ms / 3.3f) - 2U;
+    byte thresh = (byte)(((uint32_t)mv * 10U) / 506U);
+    uint16_t dly = (uint16_t)(((uint32_t)ms * 10U) / 33U) - 2U;
+    uint8_t status = 1U;
 
     if (thresh < 20U || thresh > 90U) {
         thresh = 50U;
@@ -985,36 +1058,40 @@ void bq76952_setCellUndervoltageProtection(unsigned int mv, unsigned int ms)
         dly = 74U;
     }
 
-    bq76952_writeDataMemory(0x9275U, thresh, 1U);
-    bq76952_writeDataMemory(0x9276U, (int16_t)dly, 2U);
+    status &= (uint8_t)bq76952_writeDataMemory(0x9275U, thresh, 1U);
+    status &= (uint8_t)bq76952_writeDataMemory(0x9276U, (int16_t)dly, 2U);
+    return status != 0U;
 }
 
-void bq76952_setShortCircuitThreshold(void)
+bool bq76952_setShortCircuitThreshold(void)
 {
     /* Preset hiện tại:
      * threshold code = 2 và delay code = 30.
      * Ý nghĩa vật lý phụ thuộc Rsense và bảng mã SCD trong datasheet.
      */
-    bq76952_writeDataMemory(SCD_THRESHOLD_CONFIG, 2, 1U);
-    bq76952_writeDataMemory(SCD_DELAY_CONFIG, 30, 1U);
+    uint8_t status = 1U;
+
+    status &= (uint8_t)bq76952_writeDataMemory(SCD_THRESHOLD_CONFIG, 2, 1U);
+    status &= (uint8_t)bq76952_writeDataMemory(SCD_DELAY_CONFIG, 30, 1U);
+    return status != 0U;
 }
 
-void bq76952_setProtectionConfiguration(void)
+bool bq76952_setProtectionConfiguration(void)
 {
     /* 0x0600 là bitmask cấu hình cách protection phản ứng/latch theo lựa chọn của dự án. */
-    bq76952_writeDataMemory(PROTECTION_CONFIGURATION, 0x0600, 2U);
+    return bq76952_writeDataMemory(PROTECTION_CONFIGURATION, 0x0600, 2U);
 }
 
-void bq76952_setShutdownStackVoltage(unsigned int voltage)
+bool bq76952_setShutdownStackVoltage(unsigned int voltage)
 {
-    bq76952_writeDataMemory(SHUTDOWN_STACK_VOLTAGE, (int16_t)voltage, 2U);
+    return bq76952_writeDataMemory(SHUTDOWN_STACK_VOLTAGE, (int16_t)voltage, 2U);
 }
 
-void bq76952_setChargingOvercurrentProtection(unsigned int mv, byte ms)
+bool bq76952_setChargingOvercurrentProtection(unsigned int mv, byte ms)
 {
     /* COC dùng bước 2 mV/LSB trên shunt; delay cũng dùng khoảng 3.3 ms/LSB. */
     byte thresh = (byte)(mv / 2U);
-    byte dly = (byte)(ms / 3.3f) - 2U;
+    byte dly = (byte)(((uint16_t)ms * 10U) / 33U) - 2U;
 
     if (thresh < 2U || thresh > 62U) {
         thresh = 2U;
@@ -1023,15 +1100,18 @@ void bq76952_setChargingOvercurrentProtection(unsigned int mv, byte ms)
         dly = 4U;
     }
 
-    bq76952_writeDataMemory(0x9280U, thresh, 1U);
-    bq76952_writeDataMemory(0x9281U, dly, 1U);
+    uint8_t status = 1U;
+
+    status &= (uint8_t)bq76952_writeDataMemory(0x9280U, thresh, 1U);
+    status &= (uint8_t)bq76952_writeDataMemory(0x9281U, dly, 1U);
+    return status != 0U;
 }
 
-void bq76952_setDischargingOvercurrentProtection(unsigned int mv, byte ms)
+bool bq76952_setDischargingOvercurrentProtection(unsigned int mv, byte ms)
 {
     /* Ghi cùng ngưỡng cho OCD1 và OCD2, nhưng delay được ghi ở vùng OCD1 delay. */
     byte thresh = (byte)(mv / 2U);
-    byte dly = (byte)(ms / 3.3f) - 2U;
+    byte dly = (byte)(((uint16_t)ms * 10U) / 33U) - 2U;
 
     if (thresh < 2U || thresh > 100U) {
         thresh = 2U;
@@ -1040,24 +1120,27 @@ void bq76952_setDischargingOvercurrentProtection(unsigned int mv, byte ms)
         dly = 1U;
     }
 
-    bq76952_writeDataMemory(0x9282U, thresh, 1U);
+    uint8_t status = 1U;
+
+    status &= (uint8_t)bq76952_writeDataMemory(0x9282U, thresh, 1U);
     HAL_Delay(2U);
-    bq76952_writeDataMemory(0x9284U, thresh, 1U);
-    bq76952_writeDataMemory(0x9283U, dly, 1U);
+    status &= (uint8_t)bq76952_writeDataMemory(0x9284U, thresh, 1U);
+    status &= (uint8_t)bq76952_writeDataMemory(0x9283U, dly, 1U);
+    return status != 0U;
 }
 
-void bq76952_setDischargingOvercurrentProtection_OCD3(int16_t mA)
+bool bq76952_setDischargingOvercurrentProtection_OCD3(int16_t mA)
 {
     /* OCD3 dùng giá trị dòng theo đơn vị và dấu được BQ76952 định nghĩa trong data memory. */
-    bq76952_writeDataMemory(0x928AU, mA, 2U);
+    return bq76952_writeDataMemory(0x928AU, mA, 2U);
 }
 
-void bq76952_setDischargingOvercurrentProtection_Recovery(int16_t mA)
+bool bq76952_setDischargingOvercurrentProtection_Recovery(int16_t mA)
 {
-    bq76952_writeDataMemory(0x928DU, mA, 2U);
+    return bq76952_writeDataMemory(0x928DU, mA, 2U);
 }
 
-void bq76952_setDischargingShortcircuitProtection(bq76952_scd_thresh_t thresh, unsigned int us)
+bool bq76952_setDischargingShortcircuitProtection(bq76952_scd_thresh_t thresh, unsigned int us)
 {
     /* Delay SCD xấp xỉ 15 us/LSB, thư viện cộng 1 để tránh code 0. */
     byte dly = (byte)(us / 15U) + 1U;
@@ -1066,47 +1149,73 @@ void bq76952_setDischargingShortcircuitProtection(bq76952_scd_thresh_t thresh, u
         dly = 2U;
     }
 
-    bq76952_writeDataMemory(0x9286U, (int16_t)thresh, 1U);
-    bq76952_writeDataMemory(0x9287U, dly, 1U);
+    uint8_t status = 1U;
+
+    status &= (uint8_t)bq76952_writeDataMemory(0x9286U, (int16_t)thresh, 1U);
+    status &= (uint8_t)bq76952_writeDataMemory(0x9287U, dly, 1U);
+    return status != 0U;
 }
 
-void bq76952_setChargingTemperatureMaxLimit(int temp, byte sec)
+bool bq76952_setChargingTemperatureMaxLimit(int temp, byte sec)
 {
     /* Giới hạn temp lưu trực tiếp theo độ C nguyên; sec là thời gian xác nhận lỗi. */
-    bq76952_writeDataMemory(0x929AU, bq76952_clampTemperatureLimit(temp, 55), 1U);
-    bq76952_writeDataMemory(0x929BU, sec, 1U);
+    uint8_t status = 1U;
+
+    status &= (uint8_t)bq76952_writeDataMemory(0x929AU, bq76952_clampTemperatureLimit(temp, 55), 1U);
+    status &= (uint8_t)bq76952_writeDataMemory(0x929BU, sec, 1U);
+    return status != 0U;
 }
 
-void bq76952_setDischargingTemperatureMaxLimit(int temp, byte sec)
+bool bq76952_setDischargingTemperatureMaxLimit(int temp, byte sec)
 {
-    bq76952_writeDataMemory(0x929DU, bq76952_clampTemperatureLimit(temp, 60), 1U);
-    bq76952_writeDataMemory(0x929EU, sec, 1U);
+    uint8_t status = 1U;
+
+    status &= (uint8_t)bq76952_writeDataMemory(0x929DU, bq76952_clampTemperatureLimit(temp, 60), 1U);
+    status &= (uint8_t)bq76952_writeDataMemory(0x929EU, sec, 1U);
+    return status != 0U;
 }
 
-void bq76952_setChargingTemperatureMinLimit(int threshold, int recovery, byte sec)
+bool bq76952_setChargingTemperatureMinLimit(int threshold, int recovery, byte sec)
 {
-    bq76952_writeDataMemory(UTC_THRESHOLD_CONFIG, bq76952_clampTemperatureLimit(threshold, 0), 1U);
-    bq76952_writeDataMemory(UTC_DELAY_CONFIG, sec, 1U);
-    bq76952_writeDataMemory(UTC_RECOVERY_CONFIG, bq76952_clampTemperatureLimit(recovery, 5), 1U);
+    uint8_t status = 1U;
+
+    status &= (uint8_t)bq76952_writeDataMemory(UTC_THRESHOLD_CONFIG,
+                                               bq76952_clampTemperatureLimit(threshold, 0),
+                                               1U);
+    status &= (uint8_t)bq76952_writeDataMemory(UTC_DELAY_CONFIG, sec, 1U);
+    status &= (uint8_t)bq76952_writeDataMemory(UTC_RECOVERY_CONFIG,
+                                               bq76952_clampTemperatureLimit(recovery, 5),
+                                               1U);
+    return status != 0U;
 }
 
-void bq76952_setDischargingTemperatureMinLimit(int threshold, int recovery, byte sec)
+bool bq76952_setDischargingTemperatureMinLimit(int threshold, int recovery, byte sec)
 {
-    bq76952_writeDataMemory(UTD_THRESHOLD_CONFIG, bq76952_clampTemperatureLimit(threshold, 0), 1U);
-    bq76952_writeDataMemory(UTD_DELAY_CONFIG, sec, 1U);
-    bq76952_writeDataMemory(UTD_RECOVERY_CONFIG, bq76952_clampTemperatureLimit(recovery, 5), 1U);
+    uint8_t status = 1U;
+
+    status &= (uint8_t)bq76952_writeDataMemory(UTD_THRESHOLD_CONFIG,
+                                               bq76952_clampTemperatureLimit(threshold, 0),
+                                               1U);
+    status &= (uint8_t)bq76952_writeDataMemory(UTD_DELAY_CONFIG, sec, 1U);
+    status &= (uint8_t)bq76952_writeDataMemory(UTD_RECOVERY_CONFIG,
+                                               bq76952_clampTemperatureLimit(recovery, 5),
+                                               1U);
+    return status != 0U;
 }
 
-void bq76952_setEnablePreRegulator(void)
+bool bq76952_setEnablePreRegulator(void)
 {
     /* REG0 bit0 = bật pre-regulator. */
-    bq76952_writeDataMemory(REG0_CONFIG, 0x01, 1U);
+    return bq76952_writeDataMemory(REG0_CONFIG, 0x01, 1U);
 }
 
-void bq76952_configurePowerOutputs(void)
+bool bq76952_configurePowerOutputs(void)
 {
-    bq76952_setEnablePreRegulator();
-    bq76952_setEnableRegulator(true, true);
+    uint8_t status = 1U;
+
+    status &= (uint8_t)bq76952_setEnablePreRegulator();
+    status &= (uint8_t)bq76952_setEnableRegulator(true, true);
+    return status != 0U;
 }
 
 void bq76952_prepareSleepWithReg2(void)
@@ -1123,169 +1232,187 @@ void bq76952_resumeFromSleep(void)
     bq76952_applyReg12Control(true, true);
 }
 
-void bq76952_setDA_Config(void)
+bool bq76952_setDA_Config(void)
 {
     /* USER_VOLTS_CV=1 để Stack/PACK/LD không tràn signed 16-bit trên pack 10S;
      * USER_AMPS=1 giữ đơn vị dòng là mA.
      */
-    bq76952_writeDataMemory(DA_CONFIGURATION, BQ_DA_CONFIG_DEFAULT, 1U);
+    return bq76952_writeDataMemory(DA_CONFIGURATION, BQ_DA_CONFIG_DEFAULT, 1U);
 }
 
-void bq76952_setCurrentSenseCalibration(void)
+bool bq76952_setCurrentSenseCalibration(void)
 {
-    bq76952_writeDataMemory(CC_GAIN, 0x41F2, 2U);
-    bq76952_writeDataMemory(CC_GAIN + 2U, 0x416F, 2U);
-    bq76952_writeDataMemory(CAPACITY_GAIN, 0x1C6A, 2U);
-    bq76952_writeDataMemory(CAPACITY_GAIN + 2U, 0x4A88, 2U);
+    uint8_t status = 1U;
+
+    status &= (uint8_t)bq76952_writeDataMemory(CC_GAIN, 0x41F2, 2U);
+    status &= (uint8_t)bq76952_writeDataMemory(CC_GAIN + 2U, 0x416F, 2U);
+    status &= (uint8_t)bq76952_writeDataMemory(CAPACITY_GAIN, 0x1C6A, 2U);
+    status &= (uint8_t)bq76952_writeDataMemory(CAPACITY_GAIN + 2U, 0x4A88, 2U);
+    return status != 0U;
 }
 
-void bq76952_setSF_AlertMask_A(void)
+bool bq76952_setSF_AlertMask_A(void)
 {
-    bq76952_writeDataMemory(SF_ALERT_MASK_A, 0x00, 1U);
+    return bq76952_writeDataMemory(SF_ALERT_MASK_A, 0x00, 1U);
 }
 
-void bq76952_setSF_AlertMask_B(void)
+bool bq76952_setSF_AlertMask_B(void)
 {
-    bq76952_writeDataMemory(SF_ALERT_MASK_B, 0x00, 1U);
+    return bq76952_writeDataMemory(SF_ALERT_MASK_B, 0x00, 1U);
 }
 
-void bq76952_setSF_AlertMask_C(void)
+bool bq76952_setSF_AlertMask_C(void)
 {
-    bq76952_writeDataMemory(SF_ALERT_MASK_C, 0x00, 1U);
+    return bq76952_writeDataMemory(SF_ALERT_MASK_C, 0x00, 1U);
 }
 
-void bq76952_setEnableRegulator(bool enable_reg1, bool enable_reg2)
+bool bq76952_setEnableRegulator(bool enable_reg1, bool enable_reg2)
 {
     byte reg12 = bq76952_makeReg12Control(enable_reg1, enable_reg2);
+    bool status = bq76952_writeDataMemory(REG12_CONTROL, reg12, 1U);
 
-    bq76952_writeDataMemory(REG12_CONTROL, reg12, 1U);
     bq76952_applyReg12Control(enable_reg1, enable_reg2);
+    return status;
 }
 
-void bq76952_setAlertPinConfig(void)
+bool bq76952_setAlertPinConfig(void)
 {
     /* 0x2A quy định mode chân ALERT theo cấu hình phần cứng mong muốn của dự án. */
-    bq76952_writeDataMemory(ALERT_PIN_CONFIG, 0x2A, 1U);
+    return bq76952_writeDataMemory(ALERT_PIN_CONFIG, 0x2A, 1U);
 }
 
-void bq76952_setDFETOFFPinConfig(bool both_off_mode, bool active_low)
+bool bq76952_setDFETOFFPinConfig(bool both_off_mode, bool active_low)
 {
     byte cfg = bq76952_make_pin_config(0x02U, active_low);
 
     if (both_off_mode) {
         cfg |= 0x10U;
     }
-    bq76952_writeDataMemory(DFETOFF_PIN_CONFIG, cfg, 1U);
+    return bq76952_writeDataMemory(DFETOFF_PIN_CONFIG, cfg, 1U);
 }
 
-void bq76952_setDCHGPinConfig(bool active_low)
+bool bq76952_setDCHGPinConfig(bool active_low)
 {
-    bq76952_writeDataMemory(DCHG_PIN_CONFIG, bq76952_make_pin_config(0x02U, active_low), 1U);
+    return bq76952_writeDataMemory(DCHG_PIN_CONFIG, bq76952_make_pin_config(0x02U, active_low), 1U);
 }
 
-void bq76952_setDDSGPinConfig(bool active_low)
+bool bq76952_setDDSGPinConfig(bool active_low)
 {
-    bq76952_writeDataMemory(DDSG_PIN_CONFIG, bq76952_make_pin_config(0x02U, active_low), 1U);
+    return bq76952_writeDataMemory(DDSG_PIN_CONFIG, bq76952_make_pin_config(0x02U, active_low), 1U);
 }
 
-void bq76952_setDefaultAlarmMaskConfig(void)
+bool bq76952_setDefaultAlarmMaskConfig(void)
 {
-    /* 0xF800 mask/bật nhóm alarm tương ứng trong Default Alarm Mask. */
-    bq76952_writeDataMemory(DEFAULT_ALARM_MASK_CONFIG, (int16_t)0xF800U, 2U);
+    bool status;
+
+    /* Keep default safety/PF alarm bits and add WAKE so ALERT toggles when BQ exits SLEEP. */
+    status = bq76952_writeDataMemory(DEFAULT_ALARM_MASK_CONFIG,
+                                     (int16_t)BQ_ALARM_MASK_WITH_WAKE,
+                                     2U);
+    if (status) {
+        status = bq76952_setAlarmEnableRegister(BQ_ALARM_MASK_WITH_WAKE);
+    }
+    return status;
 }
 
-void bq76952_setVcellMode(uint16_t vcell_mode)
+bool bq76952_setVcellMode(uint16_t vcell_mode)
 {
     /* Mỗi bit tương ứng một kênh VCx; bit = 1 nghĩa là tham gia đo điện áp cell. */
-    bq76952_writeDataMemory(VCELL_MODE, (int16_t)vcell_mode, 2U);
+    return bq76952_writeDataMemory(VCELL_MODE, (int16_t)vcell_mode, 2U);
 }
 
-void bq76952_setEnableCHG_FET_Protection(void)
+bool bq76952_setEnableCHG_FET_Protection(void)
 {
     /* Ghi 0 để bỏ chặn các protection trên CHG FET theo preset hiện tại. */
-    bq76952_writeDataMemory(CHG_FET_PROTECTION_A, 0x00, 1U);
-    bq76952_writeDataMemory(CHG_FET_PROTECTION_B, 0x00, 1U);
-    bq76952_writeDataMemory(CHG_FET_PROTECTION_C, 0x00, 1U);
+    uint8_t status = 1U;
+
+    status &= (uint8_t)bq76952_writeDataMemory(CHG_FET_PROTECTION_A, 0x00, 1U);
+    status &= (uint8_t)bq76952_writeDataMemory(CHG_FET_PROTECTION_B, 0x00, 1U);
+    status &= (uint8_t)bq76952_writeDataMemory(CHG_FET_PROTECTION_C, 0x00, 1U);
+    return status != 0U;
 }
 
-void bq76952_setEnableProtectionsA(void)
+bool bq76952_setEnableProtectionsA(void)
 {
     /* 0xFC bật hầu hết protection nhóm A, trừ các bit thấp không dùng. */
-    bq76952_writeDataMemory(ENABLE_PROTECTIONS_A, 0xFC, 1U);
+    return bq76952_writeDataMemory(ENABLE_PROTECTIONS_A, 0xFC, 1U);
 }
 
-void bq76952_setEnableProtectionsB(void)
+bool bq76952_setEnableProtectionsB(void)
 {
-    bq76952_writeDataMemory(ENABLE_PROTECTIONS_B, 0xF7, 1U);
+    return bq76952_writeDataMemory(ENABLE_PROTECTIONS_B, 0xF7, 1U);
 }
 
-void bq76952_setEnableProtectionsC(void)
+bool bq76952_setEnableProtectionsC(void)
 {
     /* 0x80 hiện chỉ bật protection bit cao của nhóm C. */
-    bq76952_writeDataMemory(ENABLE_PROTECTIONS_C, 0x80, 1U);
+    return bq76952_writeDataMemory(ENABLE_PROTECTIONS_C, 0x80, 1U);
 }
 
-void bq76952_setCHGFETProtectionsA(byte val)
+bool bq76952_setCHGFETProtectionsA(byte val)
 {
-    bq76952_writeDataMemory(CHG_FET_PROTECTIONS_A, val, 1U);
+    return bq76952_writeDataMemory(CHG_FET_PROTECTIONS_A, val, 1U);
 }
 
-void bq76952_setCellInterconnectResistances(void)
+bool bq76952_setCellInterconnectResistances(void)
 {
     /* Ghi tuần tự 16 mục vì BQ76952 cho phép hiệu chỉnh riêng từng liên kết cell sense. */
     for (byte cell = 0U; cell < 16U; ++cell) {
-        bq76952_writeDataMemory(CELL_INTERCONNECT_RESISTANCE + ((unsigned int)cell * 2U),
-                                CELL_INTERCONNECT_RESISTANCE_MOHM,
-                                2U);
+        if (!bq76952_writeDataMemory(CELL_INTERCONNECT_RESISTANCE + ((unsigned int)cell * 2U),
+                                     CELL_INTERCONNECT_RESISTANCE_MOHM,
+                                     2U)) {
+            return false;
+        }
     }
+    return true;
 }
 
-void bq76952_setDSGFETProtectionsA(void)
+bool bq76952_setDSGFETProtectionsA(void)
 {
     /* 0xA4 là preset mapping fault -> DSG FET action của dự án. */
-    bq76952_writeDataMemory(DSG_FET_PROTECTION_A, 0xA4, 1U);
+    return bq76952_writeDataMemory(DSG_FET_PROTECTION_A, 0xA4, 1U);
 }
 
-void bq76952_setDSGFETProtectionsB(void)
+bool bq76952_setDSGFETProtectionsB(void)
 {
-    bq76952_writeDataMemory(DSG_FET_PROTECTION_B, 0x00, 1U);
+    return bq76952_writeDataMemory(DSG_FET_PROTECTION_B, 0x00, 1U);
 }
 
-void bq76952_setDSGFETProtectionsC(void)
+bool bq76952_setDSGFETProtectionsC(void)
 {
-    bq76952_writeDataMemory(DSG_FET_PROTECTION_C, 0x80, 1U);
+    return bq76952_writeDataMemory(DSG_FET_PROTECTION_C, 0x80, 1U);
 }
 
-void bq76952_setFET_Options(void)
+bool bq76952_setFET_Options(void)
 {
     /* 0x1D cấu hình hành vi FET/precharge/predischarge theo thiết kế board hiện tại. */
-    bq76952_writeDataMemory(FET_OPTIONS, 0x1D, 1U);
+    return bq76952_writeDataMemory(FET_OPTIONS, 0x1D, 1U);
 }
 
-void bq76952_setFET_PredischargeTimeout(void)
+bool bq76952_setFET_PredischargeTimeout(void)
 {
-    bq76952_writeDataMemory(FET_PREDISCHARGE_TIMEOUT, 0x00, 1U);
+    return bq76952_writeDataMemory(FET_PREDISCHARGE_TIMEOUT, 0x00, 1U);
 }
 
-void bq76952_setFET_PredischargeStopDelta(void)
+bool bq76952_setFET_PredischargeStopDelta(void)
 {
     /* 100 là delta điện áp kết thúc predischarge theo đơn vị mã hóa của BQ76952. */
-    bq76952_writeDataMemory(FET_PREDISCHARGE_STOP_DELTA, 100, 1U);
+    return bq76952_writeDataMemory(FET_PREDISCHARGE_STOP_DELTA, 100, 1U);
 }
 
-void bq76952_setEnableTS1(void)
+bool bq76952_setEnableTS1(void)
 {
-    bq76952_writeDataMemory(TS1_CONFIG, 0x07, 1U);
+    return bq76952_writeDataMemory(TS1_CONFIG, 0x07, 1U);
 }
 
-void bq76952_setEnableTS2(void)
+bool bq76952_setEnableTS2(void)
 {
-    bq76952_writeDataMemory(TS2_CONFIG, 0x07, 1U);
+    return bq76952_writeDataMemory(TS2_CONFIG, 0x07, 1U);
 }
 
-void bq76952_setEnableTS3(void)
+bool bq76952_setEnableTS3(void)
 {
-    bq76952_writeDataMemory(TS3_CONFIG, 0x07, 1U);
+    return bq76952_writeDataMemory(TS3_CONFIG, 0x07, 1U);
 }
 
 unsigned int bq76952_getAlertStatusRegister(void)
@@ -1296,6 +1423,24 @@ unsigned int bq76952_getAlertStatusRegister(void)
 unsigned int bq76952_getAlertRawStatusRegister(void)
 {
     return bq76952_directCommand(CMD_DIR_ALARM_RAW_STATUS);
+}
+
+unsigned int bq76952_getAlarmEnableRegister(void)
+{
+    return bq76952_directCommand(CMD_DIR_ALARM_ENABLE);
+}
+
+bool bq76952_setAlarmEnableRegister(uint16_t mask)
+{
+    return bq76952_writeDirectCommand(CMD_DIR_ALARM_ENABLE, mask);
+}
+
+bool bq76952_clearAlertStatusRegister(uint16_t mask)
+{
+    if (mask == 0U) {
+        return true;
+    }
+    return bq76952_writeDirectCommand(CMD_DIR_ALARM_STATUS, mask);
 }
 
 byte bq76952_HandleAlarm(void)
@@ -1338,7 +1483,7 @@ void bq76952_handle_alarm(void)
 //     unsigned int manufacturing_status;
 //     int current_now;
 //     bq76952_temp_t temperature_status;
-//     float internal_temp;
+//     int16_t internal_temp;
 //     unsigned int stack_voltage;
 //     int cell_voltage;
 //     unsigned int alert_raw;

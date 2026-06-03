@@ -117,6 +117,17 @@ typedef enum {
 #define TS2_CONFIG 0x92FEU
 #define TS3_CONFIG 0x92FFU
 #define BALANCING_CONFIGURATION 0x9335U
+#define CELL_BALANCE_MIN_CELL_TEMP 0x9336U
+#define CELL_BALANCE_MAX_CELL_TEMP 0x9337U
+#define CELL_BALANCE_MAX_INTERNAL_TEMP 0x9338U
+#define CELL_BALANCE_INTERVAL 0x9339U
+#define CELL_BALANCE_MAX_CELLS 0x933AU
+#define CELL_BALANCE_MIN_CELL_V_CHARGE 0x933BU
+#define CELL_BALANCE_MIN_DELTA_CHARGE 0x933DU
+#define CELL_BALANCE_STOP_DELTA_CHARGE 0x933EU
+#define CELL_BALANCE_MIN_CELL_V_RELAX 0x933FU
+#define CELL_BALANCE_MIN_DELTA_RELAX 0x9341U
+#define CELL_BALANCE_STOP_DELTA_RELAX 0x9342U
 
 #define UNSEAL_KEY_STEP_1 0x0414U
 #define UNSEAL_KEY_STEP_2 0x3672U
@@ -301,9 +312,9 @@ unsigned int bq76952_getStackVoltage(void);
 /* Đọc điện áp tại chân PACK của BQ76952, đơn vị mV. */
 unsigned int bq76952_getPackVoltage(void);
 /* Đọc nhiệt độ die nội bộ của IC, trả về độ C. */
-float bq76952_getInternalTemp(void);
+int16_t bq76952_getInternalTemp(void);
 /* Đọc nhiệt độ từ kênh thermistor/chân cảm biến được chọn, trả về độ C. */
-float bq76952_getThermistorTemp(bq76952_thermistor_t thermistor);
+int16_t bq76952_getThermistorTemp(bq76952_thermistor_t thermistor);
 /* Đọc các cờ bảo vệ đang kích hoạt. */
 bq76952_protection_t bq76952_getProtectionStatus(void);
 /* Đọc các cờ alert latched nhóm C. */
@@ -323,39 +334,50 @@ bool bq76952_isDischarging(void);
 /* Legacy alias for bq76952_isChargeFetOn(). */
 bool bq76952_isCharging(void);
 /* Bật/tắt host/manual cell balancing trong data memory của BQ. */
-void bq76952_setCellBalancingEnabled(bool enabled);
+bool bq76952_setCellBalancingEnabled(bool enabled);
+/* Cấu hình BQ tự chọn cell balancing trong charge/relax/sleep theo policy truyền vào. */
+bool bq76952_configureAutonomousCellBalancing(uint16_t min_cell_mv,
+                                              uint8_t start_delta_mv,
+                                              uint8_t stop_delta_mv,
+                                              int8_t min_cell_temp_c,
+                                              int8_t max_cell_temp_c,
+                                              int8_t max_internal_temp_c,
+                                              uint8_t interval_s,
+                                              uint8_t max_cells);
 /* Gửi mask cân bằng theo cell logic 0..9 của pack, driver tự đổi sang bit VC của BQ. */
 void bq76952_setCellBalanceMask(uint16_t logical_cell_mask);
 /* Đọc mask cell balancing active dạng bit VC gốc của BQ. */
 uint16_t bq76952_getCellBalanceActiveMask(void);
+/* Đọc thời gian BQ đang cân bằng trong phiên hiện tại, đơn vị giây. */
+uint16_t bq76952_getCellBalanceActiveSeconds(void);
 /* Cấu hình ngưỡng Cell OV và thời gian debounce, đầu vào theo mV/ms. */
-void bq76952_setCellOvervoltageProtection(unsigned int mv, unsigned int ms);
+bool bq76952_setCellOvervoltageProtection(unsigned int mv, unsigned int ms);
 /* Cấu hình ngưỡng Cell UV và thời gian debounce, đầu vào theo mV/ms. */
-void bq76952_setCellUndervoltageProtection(unsigned int mv, unsigned int ms);
+bool bq76952_setCellUndervoltageProtection(unsigned int mv, unsigned int ms);
 /* Ghi cấu hình SCD mặc định hard-code của thư viện. */
-void bq76952_setShortCircuitThreshold(void);
+bool bq76952_setShortCircuitThreshold(void);
 /* Cấu hình chung cho khối protection theo giá trị bitmask của thư viện. */
-void bq76952_setProtectionConfiguration(void);
+bool bq76952_setProtectionConfiguration(void);
 /* Đặt ngưỡng điện áp stack để IC cho phép vào shutdown. */
-void bq76952_setShutdownStackVoltage(unsigned int voltage);
+bool bq76952_setShutdownStackVoltage(unsigned int voltage);
 /* Cấu hình bảo vệ quá dòng khi sạc, đầu vào theo mV trên shunt và ms. */
-void bq76952_setChargingOvercurrentProtection(unsigned int mv, byte ms);
+bool bq76952_setChargingOvercurrentProtection(unsigned int mv, byte ms);
 /* Cấu hình ngưỡng nhiệt độ tối đa cho sạc, độ C và thời gian giữ lỗi. */
-void bq76952_setChargingTemperatureMaxLimit(int temp, byte sec);
+bool bq76952_setChargingTemperatureMaxLimit(int temp, byte sec);
 /* Cấu hình ngưỡng nhiệt độ thấp khi sạc, độ C, recovery và thời gian giữ lỗi. */
-void bq76952_setChargingTemperatureMinLimit(int threshold, int recovery, byte sec);
+bool bq76952_setChargingTemperatureMinLimit(int threshold, int recovery, byte sec);
 /* Cấu hình bảo vệ quá dòng khi xả, đầu vào theo mV trên shunt và ms. */
-void bq76952_setDischargingOvercurrentProtection(unsigned int mv, byte ms);
+bool bq76952_setDischargingOvercurrentProtection(unsigned int mv, byte ms);
 /* Cấu hình ngưỡng OCD3 recovery/trigger theo dòng mA quy đổi nội bộ của IC. */
-void bq76952_setDischargingOvercurrentProtection_OCD3(int16_t mA);
+bool bq76952_setDischargingOvercurrentProtection_OCD3(int16_t mA);
 /* Cấu hình dòng phục hồi sau lỗi overcurrent discharge. */
-void bq76952_setDischargingOvercurrentProtection_Recovery(int16_t mA);
+bool bq76952_setDischargingOvercurrentProtection_Recovery(int16_t mA);
 /* Cấu hình short-circuit discharge với mã ngưỡng enum và độ trễ micro giây. */
-void bq76952_setDischargingShortcircuitProtection(bq76952_scd_thresh_t thresh, unsigned int us);
+bool bq76952_setDischargingShortcircuitProtection(bq76952_scd_thresh_t thresh, unsigned int us);
 /* Cấu hình ngưỡng nhiệt độ tối đa cho xả, độ C và thời gian giữ lỗi. */
-void bq76952_setDischargingTemperatureMaxLimit(int temp, byte sec);
+bool bq76952_setDischargingTemperatureMaxLimit(int temp, byte sec);
 /* Cấu hình ngưỡng nhiệt độ thấp khi xả, độ C, recovery và thời gian giữ lỗi. */
-void bq76952_setDischargingTemperatureMinLimit(int threshold, int recovery, byte sec);
+bool bq76952_setDischargingTemperatureMinLimit(int threshold, int recovery, byte sec);
 /* Đọc device number để xác minh đúng loại IC. */
 unsigned int bq76952_getDeviceNumber(void);
 /* Đọc phiên bản phần cứng của IC. */
@@ -379,71 +401,77 @@ bool bq76952_program_OTP_with_status(bq76952_otp_status_t *status);
 /* Chạy chuỗi OTP write, chỉ nên dùng sau khi đã xác minh cấu hình cuối cùng. */
 bool bq76952_program_OTP(void);
 /* Bật pre-regulator nội bộ. */
-void bq76952_setEnablePreRegulator(void);
+bool bq76952_setEnablePreRegulator(void);
 /* Bật REG0, REG1 và REG2 theo nguồn trên board. */
-void bq76952_configurePowerOutputs(void);
+bool bq76952_configurePowerOutputs(void);
 /* Cho phép BQ vào SLEEP tự động nhưng giữ REG2 cấp nguồn hệ thống. */
 void bq76952_prepareSleepWithReg2(void);
 /* Không cho BQ tự vào SLEEP nữa sau khi hệ thống thức. */
 void bq76952_resumeFromSleep(void);
 /* Cấu hình gain đo dòng cho shunt 0.5 mOhm trên board. */
-void bq76952_setCurrentSenseCalibration(void);
+bool bq76952_setCurrentSenseCalibration(void);
 /* Cấu hình DA (digital/analog) block theo preset của thư viện. */
-void bq76952_setDA_Config(void);
+bool bq76952_setDA_Config(void);
 /* Bỏ mask alert nhóm A để lỗi tương ứng có thể kéo chân ALERT. */
-void bq76952_setSF_AlertMask_A(void);
+bool bq76952_setSF_AlertMask_A(void);
 /* Bỏ mask alert nhóm B để lỗi tương ứng có thể kéo chân ALERT. */
-void bq76952_setSF_AlertMask_B(void);
+bool bq76952_setSF_AlertMask_B(void);
 /* Bỏ mask alert nhóm C để lỗi tương ứng có thể kéo chân ALERT. */
-void bq76952_setSF_AlertMask_C(void);
+bool bq76952_setSF_AlertMask_C(void);
 /* Bật/tắt REG1 và REG2 trong REG12_CONTROL. */
-void bq76952_setEnableRegulator(bool enable_reg1, bool enable_reg2);
+bool bq76952_setEnableRegulator(bool enable_reg1, bool enable_reg2);
 /* Cấu hình chân ALERT theo bit pattern được hard-code. */
-void bq76952_setAlertPinConfig(void);
+bool bq76952_setAlertPinConfig(void);
 /* Cấu hình DFETOFF/BOTHOFF pin để MCU có thể cắt nhanh đường FET qua chân cứng. */
-void bq76952_setDFETOFFPinConfig(bool both_off_mode, bool active_low);
+bool bq76952_setDFETOFFPinConfig(bool both_off_mode, bool active_low);
 /* Cấu hình DCHG pin thành output trạng thái fault liên quan nhánh charge. */
-void bq76952_setDCHGPinConfig(bool active_low);
+bool bq76952_setDCHGPinConfig(bool active_low);
 /* Cấu hình DDSG pin thành output trạng thái fault liên quan nhánh discharge. */
-void bq76952_setDDSGPinConfig(bool active_low);
+bool bq76952_setDDSGPinConfig(bool active_low);
 /* Cấu hình mask mặc định của alarm status. */
-void bq76952_setDefaultAlarmMaskConfig(void);
+bool bq76952_setDefaultAlarmMaskConfig(void);
 /* Chọn cell nào được tham gia phép đo điện áp bằng bitmask VCELL_MODE. */
-void bq76952_setVcellMode(uint16_t vcell_mode);
+bool bq76952_setVcellMode(uint16_t vcell_mode);
 /* Cấu hình bảo vệ để CHG FET bị ảnh hưởng bởi các fault cần thiết. */
-void bq76952_setEnableCHG_FET_Protection(void);
+bool bq76952_setEnableCHG_FET_Protection(void);
 /* Bật nhóm protection A theo bitmask của thư viện. */
-void bq76952_setEnableProtectionsA(void);
+bool bq76952_setEnableProtectionsA(void);
 /* Bật nhóm protection B theo bitmask của thư viện. */
-void bq76952_setEnableProtectionsB(void);
+bool bq76952_setEnableProtectionsB(void);
 /* Bật nhóm protection C theo bitmask của thư viện. */
-void bq76952_setEnableProtectionsC(void);
+bool bq76952_setEnableProtectionsC(void);
 /* Ghi trực tiếp thanh ghi CHG_FET_PROTECTIONS_A với giá trị caller cung cấp. */
-void bq76952_setCHGFETProtectionsA(byte val);
+bool bq76952_setCHGFETProtectionsA(byte val);
 /* Cấu hình protection mapping cho DSG FET, nhóm A. */
-void bq76952_setDSGFETProtectionsA(void);
+bool bq76952_setDSGFETProtectionsA(void);
 /* Cấu hình protection mapping cho DSG FET, nhóm B. */
-void bq76952_setDSGFETProtectionsB(void);
+bool bq76952_setDSGFETProtectionsB(void);
 /* Cấu hình protection mapping cho DSG FET, nhóm C. */
-void bq76952_setDSGFETProtectionsC(void);
+bool bq76952_setDSGFETProtectionsC(void);
 /* Ghi FET_OPTIONS theo preset của thư viện. */
-void bq76952_setFET_Options(void);
+bool bq76952_setFET_Options(void);
 /* Đặt timeout cho pha pre-discharge. */
-void bq76952_setFET_PredischargeTimeout(void);
+bool bq76952_setFET_PredischargeTimeout(void);
 /* Đặt delta điện áp để kết thúc pre-discharge. */
-void bq76952_setFET_PredischargeStopDelta(void);
+bool bq76952_setFET_PredischargeStopDelta(void);
 /* Ghi điện trở interconnect cho từng cell sense input. */
-void bq76952_setCellInterconnectResistances(void);
+bool bq76952_setCellInterconnectResistances(void);
 /* Đọc raw alarm status trước khi qua lớp mask/clear. */
 unsigned int bq76952_getAlertRawStatusRegister(void);
 /* Bật chức năng đo nhiệt ở chân TS1. */
-void bq76952_setEnableTS1(void);
+bool bq76952_setEnableTS1(void);
 /* Bật chức năng đo nhiệt ở chân TS2. */
-void bq76952_setEnableTS2(void);
+bool bq76952_setEnableTS2(void);
 /* Bật chức năng đo nhiệt ở chân TS3. */
-void bq76952_setEnableTS3(void);
+bool bq76952_setEnableTS3(void);
 /* Đọc alarm status sau khi IC tổng hợp các nguồn cảnh báo. */
 unsigned int bq76952_getAlertStatusRegister(void);
+/* Đọc mask runtime quyết định Alarm Raw Status bit nào được latch ra ALERT. */
+unsigned int bq76952_getAlarmEnableRegister(void);
+/* Ghi mask runtime cho Alarm Enable direct command. */
+bool bq76952_setAlarmEnableRegister(uint16_t mask);
+/* Ghi 1 vào các bit Alarm Status cần clear để nhả chân ALERT. */
+bool bq76952_clearAlertStatusRegister(uint16_t mask);
 /* Hàm helper đọc alarm status và trả byte thấp để lớp trên xử lý nhanh. */
 byte bq76952_HandleAlarm(void);
 /* Đọc battery status và giải mã ra bitfield. */

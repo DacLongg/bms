@@ -59,8 +59,8 @@ Cac cau hinh chinh:
 - Cau hinh qua nhiet sac: `BMS_CHARGE_OT_CUTOFF_C = 45 C`.
 - Cau hinh qua nhiet xa: `BMS_DISCHARGE_OT_CUTOFF_C = 60 C`.
 - Cau hinh hardware over-current theo dien ap sense quy doi tu `BMS_OVER_CURRENT_MA` va `BMS_BQ_SENSE_RESISTOR_UOHM`.
-- Enable host-controlled cell balancing.
-- Tat balancing ban dau va bat FET neu khong co fault.
+- Configure autonomous cell balancing in BQ.
+- Bat FET neu khong co fault.
 
 Luu y: BQ76952 cau hinh OCD1/OCD2 bang mV tren shunt, khong nhan truc tiep mA. Neu thay doi shunt, can cap nhat `BMS_BQ_SENSE_RESISTOR_UOHM`.
 
@@ -248,24 +248,23 @@ Hien tai gia tri nay nam trong RAM. Neu can giu sau khi mat nguon, can them co c
 
 ## 12. Cell Balancing
 
-Balancing duoc BMS dieu khien host-controlled bang `bq76952_setCellBalanceMask()`.
+Balancing duoc cau hinh autonomous trong BQ, khong con dieu khien mask thu cong tu MCU.
 
-Dieu kien cho phep balancing:
+Data memory policy:
 
-- `state == BMS_STATE_NORMAL`.
-- `deltaCellVoltage >= BMS_BALANCE_DELTA_MV`.
-- Khong dang xa.
-- Cell duoc chon phai `>= BMS_BALANCE_MIN_CELL_MV`.
+- `Balancing Configuration (0x9335) = 0x07`: auto balancing khi charge, relax va sleep.
+- `Min Cell V (Charge/Relax) = BMS_BALANCE_MIN_CELL_MV` (3800 mV).
+- `Min Delta (Charge/Relax) = BMS_BALANCE_DELTA_MV` (30 mV).
+- `Stop Delta (Charge/Relax) = BMS_BALANCE_DELTA_MV_RECOVERY` (20 mV).
+- `Min/Max Cell Temp = 5/45 C`.
+- `Cell Balance Interval = BMS_BALANCE_INTERVAL_SEC`.
+- `Cell Balance Max Cells = BMS_BALANCE_MAX_ACTIVE_CELLS`.
 
-Policy chon cell:
+Runtime status:
 
-1. Tim cac cell cao hon min cell it nhat `BMS_BALANCE_DELTA_MV`.
-2. Chi chon cell co dien ap du cao de xa can bang.
-3. Tranh chon 2 cell logic lien ke trong cung mot refresh de giam stress nhiet/mach bypass.
-4. Doi mask logic 10 cell sang mask VC cua BQ trong driver.
-5. Gui subcommand `CB_ACTIVE_CELLS (0x0083)` cho BQ.
-
-Neu co fault, khong can balancing, hoac dang xa, BMS gui mask `0` de tat balancing.
+- MCU doc `CB_ACTIVE_CELLS (0x0083)` de lay `balanceMask`.
+- `balanceRequired` hien gio co nghia la BQ dang active balancing (`balanceMask != 0`).
+- MCU khong ghi `CB_ACTIVE_CELLS`; viec chon cell va dung balancing do BQ quyet dinh.
 
 ## 13. Error Handling
 

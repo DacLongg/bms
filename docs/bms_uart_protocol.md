@@ -91,6 +91,8 @@ Current `protocolVersion` is `0x03`.
 | 49 | u32 | alertCounter |
 | 53 | u16 | circleCounter |
 
+`balanceRequired` is 1 when BQ reports active autonomous cell balancing. `balanceMask` is read from BQ `CB_ACTIVE_CELLS (0x0083)`.
+
 State values:
 
 | Value | State |
