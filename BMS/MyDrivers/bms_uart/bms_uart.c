@@ -367,8 +367,8 @@ static void bms_uart_handle_ping(uint8_t command, const uint8_t *payload, uint8_
 static void bms_uart_handle_read_summary(uint8_t command, uint8_t length)
 {
     const BMS_Tracking_t *tracking;
-    uint8_t payload[BMS_UART_MAX_PAYLOAD_SIZE];
-    uint8_t payload_len = 0U;
+    // uint8_t payload[BMS_UART_MAX_PAYLOAD_SIZE];
+    // uint8_t payload_len = 0U;
 
     if (length != 0U) {
         bms_uart_send_status(command, BMS_UART_STATUS_BAD_LENGTH);
@@ -381,33 +381,34 @@ static void bms_uart_handle_read_summary(uint8_t command, uint8_t length)
         return;
     }
 
-    (void)bms_uart_put_u8(payload, &payload_len, BMS_UART_PROTOCOL_VERSION);
-    (void)bms_uart_put_u32(payload, &payload_len, HAL_GetTick());
-    (void)bms_uart_put_u8(payload, &payload_len, tracking->initialized ? 1U : 0U);
-    (void)bms_uart_put_u8(payload, &payload_len, tracking->connected ? 1U : 0U);
-    (void)bms_uart_put_u8(payload, &payload_len, (uint8_t)tracking->state);
-    (void)bms_uart_put_u8(payload, &payload_len, (uint8_t)tracking->currentDirection);
-    (void)bms_uart_put_u16(payload, &payload_len, bms_uart_fault_bitmap(tracking));
-    (void)bms_uart_put_u16(payload, &payload_len, tracking->stackVoltage);
-    (void)bms_uart_put_u16(payload, &payload_len, tracking->packVoltage);
-    (void)bms_uart_put_u16(payload, &payload_len, tracking->batAdcEstimatedPack_mV);
-    (void)bms_uart_put_i32(payload, &payload_len, tracking->current_mA);
-    (void)bms_uart_put_u16(payload, &payload_len, tracking->minCellVoltage);
-    (void)bms_uart_put_u16(payload, &payload_len, tracking->maxCellVoltage);
-    (void)bms_uart_put_u16(payload, &payload_len, tracking->averageCellVoltage);
-    (void)bms_uart_put_u16(payload, &payload_len, tracking->deltaCellVoltage);
-    (void)bms_uart_put_i16(payload, &payload_len, tracking->temperature[0]);
-    (void)bms_uart_put_i16(payload, &payload_len, tracking->temperature[1]);
-    (void)bms_uart_put_u32(payload, &payload_len, tracking->chargeThroughput_mAh);
-    (void)bms_uart_put_u32(payload, &payload_len, tracking->dischargeThroughput_mAh);
-    (void)bms_uart_put_u32(payload, &payload_len, tracking->equivalentCycle_milliCycles);
-    (void)bms_uart_put_u8(payload, &payload_len, bms_uart_fet_bitmap(tracking));
-    (void)bms_uart_put_u8(payload, &payload_len, tracking->balanceRequired ? 1U : 0U);
-    (void)bms_uart_put_u16(payload, &payload_len, tracking->balanceMask);
-    (void)bms_uart_put_u32(payload, &payload_len, tracking->alertCounter);
-    (void)bms_uart_put_u16(payload, &payload_len, tracking->circle_counter);
 
-    bms_uart_send_response(command, BMS_UART_STATUS_OK, payload, payload_len);
+    // (void)bms_uart_put_u8(payload, &payload_len, BMS_UART_PROTOCOL_VERSION);
+    // (void)bms_uart_put_u32(payload, &payload_len, HAL_GetTick());
+    // (void)bms_uart_put_u8(payload, &payload_len, tracking->initialized ? 1U : 0U);
+    // (void)bms_uart_put_u8(payload, &payload_len, tracking->connected ? 1U : 0U);
+    // (void)bms_uart_put_u8(payload, &payload_len, (uint8_t)tracking->state);
+    // (void)bms_uart_put_u8(payload, &payload_len, (uint8_t)tracking->currentDirection);
+    // (void)bms_uart_put_u16(payload, &payload_len, bms_uart_fault_bitmap(tracking));
+    // (void)bms_uart_put_u16(payload, &payload_len, tracking->stackVoltage);
+    // (void)bms_uart_put_u16(payload, &payload_len, tracking->packVoltage);
+    // (void)bms_uart_put_u16(payload, &payload_len, tracking->batAdcEstimatedPack_mV);
+    // (void)bms_uart_put_i32(payload, &payload_len, tracking->current_mA);
+    // (void)bms_uart_put_u16(payload, &payload_len, tracking->minCellVoltage);
+    // (void)bms_uart_put_u16(payload, &payload_len, tracking->maxCellVoltage);
+    // (void)bms_uart_put_u16(payload, &payload_len, tracking->averageCellVoltage);
+    // (void)bms_uart_put_u16(payload, &payload_len, tracking->deltaCellVoltage);
+    // (void)bms_uart_put_i16(payload, &payload_len, tracking->temperature[0]);
+    // (void)bms_uart_put_i16(payload, &payload_len, tracking->temperature[1]);
+    // (void)bms_uart_put_u32(payload, &payload_len, tracking->chargeThroughput_mAh);
+    // (void)bms_uart_put_u32(payload, &payload_len, tracking->dischargeThroughput_mAh);
+    // (void)bms_uart_put_u32(payload, &payload_len, tracking->equivalentCycle_milliCycles);
+    // (void)bms_uart_put_u8(payload, &payload_len, bms_uart_fet_bitmap(tracking));
+    // (void)bms_uart_put_u8(payload, &payload_len, tracking->balanceRequired ? 1U : 0U);
+    // (void)bms_uart_put_u16(payload, &payload_len, tracking->balanceMask);
+    // (void)bms_uart_put_u32(payload, &payload_len, tracking->alertCounter);
+    // (void)bms_uart_put_u16(payload, &payload_len, tracking->circle_counter);
+
+    bms_uart_send_response(command, BMS_UART_STATUS_OK, (uint8_t *)tracking, sizeof(BMS_Tracking_t));
 }
 
 static void bms_uart_handle_read_cells(uint8_t command, uint8_t length)
@@ -616,22 +617,22 @@ static void bms_uart_send_current_calibration_result(uint8_t command,
                                                      bms_uart_status_t status,
                                                      const BMS_CurrentCalibrationResult_t *result)
 {
-    uint8_t payload[BMS_UART_MAX_PAYLOAD_SIZE];
-    uint8_t payload_len = 0U;
+    // uint8_t payload[BMS_UART_MAX_PAYLOAD_SIZE];
+    // uint8_t payload_len = 0U;
 
     if (result == NULL) {
         bms_uart_send_status(command, BMS_UART_STATUS_INTERNAL_ERROR);
         return;
     }
 
-    (void)bms_uart_put_u8(payload, &payload_len, (uint8_t)result->status);
-    (void)bms_uart_put_i32(payload, &payload_len, result->actual_mA);
-    (void)bms_uart_put_i32(payload, &payload_len, result->measured_mA);
-    (void)bms_uart_put_u32(payload, &payload_len, result->deviation_ppm);
-    (void)bms_uart_put_u32(payload, &payload_len, result->oldGain_ppm);
-    (void)bms_uart_put_u32(payload, &payload_len, result->newGain_ppm);
+    // (void)bms_uart_put_u8(payload, &payload_len, (uint8_t)result->status);
+    // (void)bms_uart_put_i32(payload, &payload_len, result->actual_mA);
+    // (void)bms_uart_put_i32(payload, &payload_len, result->measured_mA);
+    // (void)bms_uart_put_u32(payload, &payload_len, result->deviation_ppm);
+    // (void)bms_uart_put_u32(payload, &payload_len, result->oldGain_ppm);
+    // (void)bms_uart_put_u32(payload, &payload_len, result->newGain_ppm);
 
-    bms_uart_send_response(command, status, payload, payload_len);
+    bms_uart_send_response(command, status, (uint8_t *)result, sizeof(BMS_CurrentCalibrationResult_t));
 }
 
 static uint16_t bms_uart_fault_bitmap(const BMS_Tracking_t *tracking)

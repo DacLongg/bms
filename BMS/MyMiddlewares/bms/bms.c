@@ -18,6 +18,7 @@
 #define BMS_BQ_FET_STAT_DSG_FET                 0x04U
 #define BMS_BQ_ALARM_RAW_XCHG                   0x0040U
 #define BMS_BQ_ALARM_RAW_XDSG                   0x0020U
+#define BMS_ALERT_ACTIVE_LEVEL                  GPIO_PIN_RESET
 #define BMS_BQ_OCC_RECOVERY_THRESHOLD_MA        0
 #define BMS_BQ_RECOVERY_TIME_SEC ((BMS_OVER_CURRENT_RECOVERY_DELAY_MS + 999UL) / 1000UL)
 #define BMS_BAT_ADC_REF_MV                      3300UL
@@ -76,6 +77,7 @@ static void BMS_UpdateBalancing(BMS_Tracking_t *tracking, uint32_t now);
 static void BMS_LoadPersistedData(BMS_Tracking_t *tracking);
 static bool BMS_SaveCurrentCalibration(uint32_t gain_ppm);
 static void BMS_SavePersistedDataIfNeeded(const BMS_Tracking_t *tracking, uint32_t now);
+static bool BMS_IsAlertPinActive(void);
 #if BMS_DEBUG_LOG_ENABLE
 const char *BMS_StateName(BMS_State_t state);
 #endif
@@ -357,6 +359,7 @@ static void BMS_ConfigureMonitor(void)
     BMS_BQ_CONFIG_STEP(config_ok, bq76952_setDCHGPinConfig(false));
     BMS_BQ_CONFIG_STEP(config_ok, bq76952_setDDSGPinConfig(false));
     BMS_BQ_CONFIG_STEP(config_ok, bq76952_setDefaultAlarmMaskConfig());
+    BMS_BQ_CONFIG_STEP(config_ok, bq76952_configureSleepWake());
     BMS_BQ_CONFIG_STEP(config_ok, bq76952_setSF_AlertMask_A());
     BMS_BQ_CONFIG_STEP(config_ok, bq76952_setSF_AlertMask_B());
     BMS_BQ_CONFIG_STEP(config_ok, bq76952_setSF_AlertMask_C());
@@ -457,7 +460,7 @@ static void BMS_HandleHardwareSignals(BMS_Tracking_t *tracking, uint32_t now)
 
     g_dchg_signal_active = (HAL_GPIO_ReadPin(DCHG_GPIO_Port, DCHG_Pin) == GPIO_PIN_SET);
     g_ddsg_signal_active = (HAL_GPIO_ReadPin(DDSG_GPIO_Port, DDSG_Pin) == GPIO_PIN_SET);
-    alert_signal_active = (HAL_GPIO_ReadPin(ALERT_GPIO_Port, ALERT_Pin) == GPIO_PIN_SET);
+    alert_signal_active = BMS_IsAlertPinActive();
 
     /* DCHG/DDSG high means the corresponding BQ FET output is disabled.
      * It is a status/wakeup signal, not a standalone pack fault.
@@ -483,6 +486,11 @@ static void BMS_HandleHardwareSignals(BMS_Tracking_t *tracking, uint32_t now)
     tracking->bqAlarmRawStatus = (uint16_t)alarm_raw_status;
     tracking->bqChargeFetBlocked = (alarm_raw_status & BMS_BQ_ALARM_RAW_XCHG) != 0U;
     tracking->bqDischargeFetBlocked = (alarm_raw_status & BMS_BQ_ALARM_RAW_XDSG) != 0U;
+}
+
+static bool BMS_IsAlertPinActive(void)
+{
+    return HAL_GPIO_ReadPin(ALERT_GPIO_Port, ALERT_Pin) == BMS_ALERT_ACTIVE_LEVEL;
 }
 
 static void BMS_UpdateBatteryAdc(BMS_Tracking_t *tracking, uint32_t now)

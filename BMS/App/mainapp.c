@@ -1,5 +1,6 @@
 
 #include "mainapp.h"
+#include "main.h"
 #include "bms_uart.h"
 #include "debug_log.h"
 
@@ -10,6 +11,9 @@ extern LPTIM_HandleTypeDef hlptim1;
 #define MAINAPP_BMS_UPDATE_MS 100U
 #define MAINAPP_IDLE_BEFORE_SLEEP_MINUTES 5U
 #define MAINAPP_SLEEP_WAKEUP_HOURS 2U
+#define MAINAPP_ALERT_WAKE_CLEAR_TRIES 3U
+#define MAINAPP_ALERT_WAKE_SETTLE_MS 2U
+#define MAINAPP_ALERT_IDLE_LEVEL GPIO_PIN_SET
 
 #define MAINAPP_IDLE_BEFORE_SLEEP_MS ((uint32_t)(MAINAPP_IDLE_BEFORE_SLEEP_MINUTES) * 60UL * 1000UL)
 #define MAINAPP_SLEEP_WAKEUP_MS ((uint32_t)(MAINAPP_SLEEP_WAKEUP_HOURS) * 60UL * 60UL * 1000UL)
@@ -83,6 +87,32 @@ static void MainApp_LogBatteryInfo(const BMS_Tracking_t *tracking)
 }
 #endif
 
+static bool MainApp_PrepareAlertWakeLine(void)
+{
+    unsigned int alarm_status = 0U;
+    unsigned int alarm_raw_status = 0U;
+    GPIO_PinState alert_pin;
+
+    for (uint8_t attempt = 0U; attempt < MAINAPP_ALERT_WAKE_CLEAR_TRIES; ++attempt) {
+        (void)bq76952_clearAlertStatusRegister(0xFFFFU);
+        HAL_Delay(MAINAPP_ALERT_WAKE_SETTLE_MS);
+
+        alarm_status = bq76952_getAlertStatusRegister();
+        alert_pin = HAL_GPIO_ReadPin(ALERT_GPIO_Port, ALERT_Pin);
+        if ((alarm_status == 0U) && (alert_pin == MAINAPP_ALERT_IDLE_LEVEL)) {
+            return true;
+        }
+    }
+
+    alarm_raw_status = bq76952_getAlertRawStatusRegister();
+    alert_pin = HAL_GPIO_ReadPin(ALERT_GPIO_Port, ALERT_Pin);
+    BMS_LOG_WARN("sleep blocked alert status=0x%04x raw=0x%04x pin=%u",
+                 (unsigned int)alarm_status,
+                 (unsigned int)alarm_raw_status,
+                 (unsigned int)alert_pin);
+    return false;
+}
+
 static bool MainApp_IsPackSleepEligible(const BMS_Tracking_t *tracking)
 {
     if (tracking == NULL) {
@@ -138,9 +168,9 @@ void mainapp(void)
         last_activity_tick = now;
         last_update_tick = now;
         initialized = true;
-        BMS_LOG_INFO("mainapp init sleepX=%lu min wakeY=%lu h",
+        BMS_LOG_INFO("mainapp init sleepX=%lu min wakeY=%lu s",
                      (unsigned long)MAINAPP_IDLE_BEFORE_SLEEP_MINUTES,
-                     (unsigned long)MAINAPP_SLEEP_WAKEUP_HOURS);
+                     (unsigned long)MAINAPP_SLEEP_WAKEUP_SECONDS);
         // BMS_Set_5V_Output(false);
     }
 
@@ -163,12 +193,20 @@ void mainapp(void)
             (((now - last_activity_tick) >= MAINAPP_IDLE_BEFORE_SLEEP_MS))) {
             power_manager_wakeup_source_t wake_source;
             HAL_StatusTypeDef sleep_rc;
+            bool alert_ready;
+            bool bq_sleep_ready = false;
 
             BMS_LOG_INFO("sleep enter bq_sleep=%u idle_ms=%lu",
                          tracking->bqSleepMode ? 1U : 0U,
                          (unsigned long)(now - last_activity_tick));
-            (void)bq76952_clearAlertStatusRegister(0xFFFFU);
-            if (bq76952_prepareSleepWithReg2() == true)
+            alert_ready = MainApp_PrepareAlertWakeLine();
+            if (alert_ready) {
+                bq_sleep_ready = bq76952_prepareSleepWithReg2();
+            }
+
+            if ((alert_ready == true) &&
+                (bq_sleep_ready == true) &&
+                (HAL_GPIO_ReadPin(ALERT_GPIO_Port, ALERT_Pin) == MAINAPP_ALERT_IDLE_LEVEL))
             {
                 Disable_Power_Battery();
                 sleep_rc = power_manager_enter_low_power_sleep(MAINAPP_SLEEP_WAKEUP_MS);
@@ -204,6 +242,10 @@ void mainapp(void)
                 }
             }
             else{
+                if (bq_sleep_ready) {
+                    bq76952_resumeFromSleep();
+                }
+                last_activity_tick = now;
                 BMS_LOG_ERROR("sleep enter failed");
             }
             

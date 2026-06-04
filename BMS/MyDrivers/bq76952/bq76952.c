@@ -30,6 +30,9 @@
 #define BQ_FET_STAT_DSG_FET         0x04U
 #define BQ_CHG_FET_PROTECTION_A_OCC 0x10U
 #define BQ_ALARM_MASK_WITH_WAKE     0xF801U
+#define BQ_ALERT_PIN_CONFIG_OPEN_DRAIN 0x22U
+#define BQ_SLEEP_WAKE_COMPARATOR_CURRENT_MA 300
+#define BQ_POWER_CONFIG_WK_SPD_MASK 0x0003U
 #define BQ_CURRENT_CALIBRATION_DEFAULT_PPM 1000000UL
 #define BQ_CURRENT_CALIBRATION_PPM_DEN 1000000ULL
 #define BQ_CC_GAIN_DEFAULT_RAW      0x413F67F5UL
@@ -1366,8 +1369,8 @@ bool bq76952_setEnableRegulator(bool enable_reg1, bool enable_reg2)
 
 bool bq76952_setAlertPinConfig(void)
 {
-    /* 0x2A quy định mode chân ALERT theo cấu hình phần cứng mong muốn của dự án. */
-    return bq76952_writeDataMemory(ALERT_PIN_CONFIG, 0x2A, 1U);
+    /* Board dùng pull-up ALERT, nên cấu hình open-drain để BQ kéo thấp khi có alarm. */
+    return bq76952_writeDataMemory(ALERT_PIN_CONFIG, BQ_ALERT_PIN_CONFIG_OPEN_DRAIN, 1U);
 }
 
 bool bq76952_setDFETOFFPinConfig(bool both_off_mode, bool active_low)
@@ -1402,6 +1405,25 @@ bool bq76952_setDefaultAlarmMaskConfig(void)
         status = bq76952_setAlarmEnableRegister(BQ_ALARM_MASK_WITH_WAKE);
     }
     return status;
+}
+
+bool bq76952_configureSleepWake(void)
+{
+    uint8_t status = 1U;
+    uint16_t power_config;
+
+    power_config = (uint16_t)bq76952_readDataMemory(POWER_CONFIG, 2);
+    if (power_config == 0U) {
+        return false;
+    }
+
+    /* Wake comparator chay cham nhat de giam nhieu; 500 mA la nguong min cua BQ76952. */
+    power_config &= (uint16_t)~BQ_POWER_CONFIG_WK_SPD_MASK;
+    status &= (uint8_t)bq76952_writeDataMemory(POWER_CONFIG, (int16_t)power_config, 2U);
+    status &= (uint8_t)bq76952_writeDataMemory(SLEEP_WAKE_COMPARATOR_CURRENT,
+                                               BQ_SLEEP_WAKE_COMPARATOR_CURRENT_MA,
+                                               2U);
+    return status != 0U;
 }
 
 bool bq76952_setVcellMode(uint16_t vcell_mode)

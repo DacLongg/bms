@@ -80,6 +80,7 @@ typedef enum {
  * Các giá trị này là địa chỉ thật trong data memory của BQ76952.
  */
 #define REG0_CONFIG 0x9237U
+#define POWER_CONFIG 0x9234U
 #define REG12_CONTROL 0x9236U
 #define CC_GAIN 0x91A8U
 #define CAPACITY_GAIN 0x91ACU
@@ -91,6 +92,7 @@ typedef enum {
 #define DEFAULT_ALARM_MASK_CONFIG 0x926DU
 #define DA_CONFIGURATION 0x9303U
 #define SHUTDOWN_STACK_VOLTAGE 0x9241U
+#define SLEEP_WAKE_COMPARATOR_CURRENT 0x924BU
 #define VCELL_MODE 0x9304U
 #define PROTECTION_CONFIGURATION 0x925FU
 #define ENABLE_PROTECTIONS_A 0x9261U
@@ -436,6 +438,8 @@ bool bq76952_setDCHGPinConfig(bool active_low);
 bool bq76952_setDDSGPinConfig(bool active_low);
 /* Cấu hình mask mặc định của alarm status. */
 bool bq76952_setDefaultAlarmMaskConfig(void);
+/* Cấu hình điều kiện BQ thoát sleep và tạo WAKE alarm khi có dòng sạc/xả. */
+bool bq76952_configureSleepWake(void);
 /* Chọn cell nào được tham gia phép đo điện áp bằng bitmask VCELL_MODE. */
 bool bq76952_setVcellMode(uint16_t vcell_mode);
 /* Cấu hình bảo vệ để CHG FET bị ảnh hưởng bởi các fault cần thiết. */
