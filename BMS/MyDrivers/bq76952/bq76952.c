@@ -28,6 +28,7 @@
 #define CMD_DIR_FET_STAT            0x7FU
 #define BQ_FET_STAT_CHG_FET         0x01U
 #define BQ_FET_STAT_DSG_FET         0x04U
+#define BQ_CHG_FET_PROTECTION_A_OCC 0x10U
 #define BQ_ALARM_MASK_WITH_WAKE     0xF801U
 #define BQ_CB_CONFIG_CHARGE         0x01U
 #define BQ_CB_CONFIG_RELAX          0x02U
@@ -1107,6 +1108,16 @@ bool bq76952_setChargingOvercurrentProtection(unsigned int mv, byte ms)
     return status != 0U;
 }
 
+bool bq76952_setChargingOvercurrentProtection_Recovery(int16_t mA)
+{
+    return bq76952_writeDataMemory(OCC_RECOVERY_THRESHOLD_CONFIG, mA, 2U);
+}
+
+bool bq76952_setProtectionRecoveryTime(byte sec)
+{
+    return bq76952_writeDataMemory(PROTECTION_RECOVERY_TIME_CONFIG, sec, 1U);
+}
+
 bool bq76952_setDischargingOvercurrentProtection(unsigned int mv, byte ms)
 {
     /* Ghi cùng ngưỡng cho OCD1 và OCD2, nhưng delay được ghi ở vùng OCD1 delay. */
@@ -1326,10 +1337,11 @@ bool bq76952_setVcellMode(uint16_t vcell_mode)
 
 bool bq76952_setEnableCHG_FET_Protection(void)
 {
-    /* Ghi 0 để bỏ chặn các protection trên CHG FET theo preset hiện tại. */
     uint8_t status = 1U;
 
-    status &= (uint8_t)bq76952_writeDataMemory(CHG_FET_PROTECTION_A, 0x00, 1U);
+    status &= (uint8_t)bq76952_writeDataMemory(CHG_FET_PROTECTION_A,
+                                               BQ_CHG_FET_PROTECTION_A_OCC,
+                                               1U);
     status &= (uint8_t)bq76952_writeDataMemory(CHG_FET_PROTECTION_B, 0x00, 1U);
     status &= (uint8_t)bq76952_writeDataMemory(CHG_FET_PROTECTION_C, 0x00, 1U);
     return status != 0U;

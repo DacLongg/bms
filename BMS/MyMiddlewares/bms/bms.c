@@ -16,6 +16,10 @@
 #define BMS_FET_STATUS_SETTLE_MS 2U
 #define BMS_BQ_FET_STAT_CHG_FET 0x01U
 #define BMS_BQ_FET_STAT_DSG_FET 0x04U
+#define BMS_BQ_ALARM_RAW_XCHG 0x0040U
+#define BMS_BQ_ALARM_RAW_XDSG 0x0020U
+#define BMS_BQ_OCC_RECOVERY_THRESHOLD_MA 0
+#define BMS_BQ_RECOVERY_TIME_SEC ((BMS_OVER_CURRENT_RECOVERY_DELAY_MS + 999UL) / 1000UL)
 #define BMS_BAT_ADC_REF_MV 3300UL
 #define BMS_BAT_ADC_COUNTS 4095UL
 #define BMS_BAT_ADC_DIVIDER_NUM 678300UL
@@ -66,6 +70,7 @@ static void BMS_UpdateFaultFlags(BMS_Tracking_t *tracking, uint32_t now);
 static void BMS_MergeBQFaultFlags(BMS_Tracking_t *tracking);
 static void BMS_UpdateState(BMS_Tracking_t *tracking);
 static void BMS_ApplyFetPolicy(BMS_Tracking_t *tracking);
+static void BMS_SyncStateWithFetAvailability(BMS_Tracking_t *tracking);
 static void BMS_UpdateCoulombCounter(BMS_Tracking_t *tracking, uint32_t dt_ms);
 static void BMS_UpdateBalancing(BMS_Tracking_t *tracking, uint32_t now);
 static void BMS_LoadPersistedData(BMS_Tracking_t *tracking);
@@ -172,6 +177,9 @@ void BMS_Error_Handler(void)
     g_bms_tracking.chargeDisabled = true;
     g_bms_tracking.dischargeDisabled = true;
     g_bms_tracking.state = BMS_STATE_FAULT;
+    g_bms_tracking.bqChargeFetBlocked = false;
+    g_bms_tracking.bqDischargeFetBlocked = false;
+    g_bms_tracking.bqAlarmRawStatus = 0U;
     g_bms_tracking.balanceMask = 0U;
     g_bms_tracking.balanceRequired = false;
     g_bms_tracking.fetOffAsserted = true;
@@ -226,6 +234,9 @@ static void BMS_ResetTracking(void)
     g_bms_tracking.chargeFetEnabled = false;
     g_bms_tracking.dischargeFetEnabled = false;
     g_bms_tracking.fetsEnabled = false;
+    g_bms_tracking.bqChargeFetBlocked = false;
+    g_bms_tracking.bqDischargeFetBlocked = false;
+    g_bms_tracking.bqAlarmRawStatus = 0U;
     g_bms_tracking.faults = (BMS_FaultFlags_t){0};
     g_bms_tracking.chargeDisabled = true;
     g_bms_tracking.dischargeDisabled = true;
@@ -342,6 +353,10 @@ static void BMS_ConfigureMonitor(void)
     BMS_BQ_CONFIG_STEP(config_ok, bq76952_setChargingOvercurrentProtection(
                                       (unsigned int)over_current_chargr_mV,
                                       50U));
+    BMS_BQ_CONFIG_STEP(config_ok, bq76952_setChargingOvercurrentProtection_Recovery(
+                                      BMS_BQ_OCC_RECOVERY_THRESHOLD_MA));
+    BMS_BQ_CONFIG_STEP(config_ok, bq76952_setProtectionRecoveryTime(
+                                      (byte)BMS_BQ_RECOVERY_TIME_SEC));
     BMS_BQ_CONFIG_STEP(config_ok, bq76952_setDischargingOvercurrentProtection(
                                       (unsigned int)over_current_sense_mV,
                                       50U));
@@ -391,6 +406,7 @@ static void BMS_HandleHardwareSignals(BMS_Tracking_t *tracking, uint32_t now)
     bool should_service_alert;
     bool alert_signal_active;
     unsigned int alarm_status;
+    unsigned int alarm_raw_status;
 
     if (tracking == NULL) {
         return;
@@ -420,7 +436,10 @@ static void BMS_HandleHardwareSignals(BMS_Tracking_t *tracking, uint32_t now)
     alarm_status = bq76952_getAlertStatusRegister();
     tracking->alertActive = alert_signal_active || (alarm_status != 0U);
     (void)bq76952_clearAlertStatusRegister((uint16_t)alarm_status);
-    (void)bq76952_getAlertRawStatusRegister();
+    alarm_raw_status = bq76952_getAlertRawStatusRegister();
+    tracking->bqAlarmRawStatus = (uint16_t)alarm_raw_status;
+    tracking->bqChargeFetBlocked = (alarm_raw_status & BMS_BQ_ALARM_RAW_XCHG) != 0U;
+    tracking->bqDischargeFetBlocked = (alarm_raw_status & BMS_BQ_ALARM_RAW_XDSG) != 0U;
 }
 
 static void BMS_UpdateBatteryAdc(BMS_Tracking_t *tracking, uint32_t now)
@@ -739,6 +758,7 @@ static void BMS_ApplyFetPolicy(BMS_Tracking_t *tracking)
         bq76952_setFET(ALL, OFF);
         HAL_Delay(BMS_FET_STATUS_SETTLE_MS);
         BMS_UpdateFetStatus(tracking);
+        BMS_SyncStateWithFetAvailability(tracking);
         return;
     }
 
@@ -747,6 +767,7 @@ static void BMS_ApplyFetPolicy(BMS_Tracking_t *tracking)
         bq76952_setFET(CHG, OFF);
         HAL_Delay(BMS_FET_STATUS_SETTLE_MS);
         BMS_UpdateFetStatus(tracking);
+        BMS_SyncStateWithFetAvailability(tracking);
         return;
     }
 
@@ -755,6 +776,7 @@ static void BMS_ApplyFetPolicy(BMS_Tracking_t *tracking)
         bq76952_setFET(DCH, OFF);
         HAL_Delay(BMS_FET_STATUS_SETTLE_MS);
         BMS_UpdateFetStatus(tracking);
+        BMS_SyncStateWithFetAvailability(tracking);
         return;
     }
 
@@ -762,6 +784,45 @@ static void BMS_ApplyFetPolicy(BMS_Tracking_t *tracking)
     bq76952_setFET(ALL, ON);
     HAL_Delay(BMS_FET_STATUS_SETTLE_MS);
     BMS_UpdateFetStatus(tracking);
+    BMS_SyncStateWithFetAvailability(tracking);
+}
+
+static void BMS_SyncStateWithFetAvailability(BMS_Tracking_t *tracking)
+{
+    uint16_t alarm_raw_status;
+    bool charge_blocked;
+    bool discharge_blocked;
+
+    if (tracking == NULL) {
+        return;
+    }
+
+    alarm_raw_status = (uint16_t)bq76952_getAlertRawStatusRegister();
+    tracking->bqAlarmRawStatus = alarm_raw_status;
+    tracking->bqChargeFetBlocked = (alarm_raw_status & BMS_BQ_ALARM_RAW_XCHG) != 0U;
+    tracking->bqDischargeFetBlocked = (alarm_raw_status & BMS_BQ_ALARM_RAW_XDSG) != 0U;
+
+    if (tracking->state != BMS_STATE_NORMAL) {
+        return;
+    }
+
+    charge_blocked = tracking->bqChargeFetBlocked || !tracking->chargeFetEnabled;
+    discharge_blocked = tracking->bqDischargeFetBlocked || !tracking->dischargeFetEnabled;
+
+    if (!charge_blocked && !discharge_blocked) {
+        return;
+    }
+
+    tracking->chargeDisabled = charge_blocked;
+    tracking->dischargeDisabled = discharge_blocked;
+
+    if (charge_blocked && discharge_blocked) {
+        tracking->state = BMS_STATE_FAULT;
+    } else if (charge_blocked) {
+        tracking->state = BMS_STATE_CHARGE_PROTECT;
+    } else {
+        tracking->state = BMS_STATE_DISCHARGE_PROTECT;
+    }
 }
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)

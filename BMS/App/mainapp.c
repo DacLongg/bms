@@ -54,6 +54,10 @@ static void MainApp_LogBatteryInfo(const BMS_Tracking_t *tracking)
     BMS_LOG_INFO("Temp1 = %u : Temp2 = %u",
                  (int)tracking->temperature[0],
                 (int)tracking->temperature[1]);
+    BMS_LOG_INFO("bq alarmRaw=0x%04x xchg=%u xdsg=%u",
+                 (unsigned int)tracking->bqAlarmRawStatus,
+                 tracking->bqChargeFetBlocked ? 1U : 0U,
+                 tracking->bqDischargeFetBlocked ? 1U : 0U);
     BMS_LOG_INFO("cell min = %u : avg = %u : max = %u : delta = %u : bal = 0x%03x",
                  tracking->minCellVoltage,
                  tracking->averageCellVoltage,
@@ -91,6 +95,9 @@ static bool MainApp_IsPackSleepEligible(const BMS_Tracking_t *tracking)
         return false;
     }
     if (BMS_IsFaultActive()) {
+        return false;
+    }
+    if (tracking->balanceRequired || (tracking->balanceMask != 0U)) {
         return false;
     }
     if (tracking->currentDirection != BMS_CURRENT_IDLE) {

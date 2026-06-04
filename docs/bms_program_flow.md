@@ -221,6 +221,11 @@ Quy tac khoa xa:
 - Neu chi `dischargeDisabled`: `bq76952_setFET(DCH, OFF)`.
 - Neu khong disabled: `bq76952_setFET(ALL, ON)`.
 
+Sau moi lenh FET, firmware doc lai `FET Status()` va `Alarm Raw Status()`.
+Neu logic fault da het nhung BQ van bao `XCHG/XDSG` hoac FET tuong ung chua ON,
+state se duoc giu o protect/fault thay vi tra ve `BMS_STATE_NORMAL`.
+Voi OCC, `BMS_STATE_NORMAL` chi xuat hien khi CHG FET da ON that, nen co the sac lai ngay.
+
 Cach nay cho phep:
 
 - Cell day qua nguong 4150 mV: ngat sac, van cho xa neu an toan.

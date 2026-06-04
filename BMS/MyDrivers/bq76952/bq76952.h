@@ -109,6 +109,8 @@ typedef enum {
 #define SF_ALERT_MASK_C 0x9271U
 #define SCD_THRESHOLD_CONFIG 0x9286U
 #define SCD_DELAY_CONFIG 0x9287U
+#define OCC_RECOVERY_THRESHOLD_CONFIG 0x9288U
+#define PROTECTION_RECOVERY_TIME_CONFIG 0x92AFU
 #define FET_OPTIONS 0x9308U
 #define FET_PREDISCHARGE_TIMEOUT 0x930EU
 #define FET_PREDISCHARGE_STOP_DELTA 0x930FU
@@ -362,6 +364,10 @@ bool bq76952_setProtectionConfiguration(void);
 bool bq76952_setShutdownStackVoltage(unsigned int voltage);
 /* Cấu hình bảo vệ quá dòng khi sạc, đầu vào theo mV trên shunt và ms. */
 bool bq76952_setChargingOvercurrentProtection(unsigned int mv, byte ms);
+/* Cấu hình dòng phục hồi sau lỗi overcurrent charge. */
+bool bq76952_setChargingOvercurrentProtection_Recovery(int16_t mA);
+/* Cấu hình thời gian recovery chung cho các protection dùng Protections:Recovery:Time. */
+bool bq76952_setProtectionRecoveryTime(byte sec);
 /* Cấu hình ngưỡng nhiệt độ tối đa cho sạc, độ C và thời gian giữ lỗi. */
 bool bq76952_setChargingTemperatureMaxLimit(int temp, byte sec);
 /* Cấu hình ngưỡng nhiệt độ thấp khi sạc, độ C, recovery và thời gian giữ lỗi. */

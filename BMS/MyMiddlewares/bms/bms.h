@@ -9,7 +9,7 @@
 #define BMS_NUMBER_OF_CELLS                         10U
 #define BMS_NUMBER_OF_THERMISTORS                   2U
 
-#define BMS_CELL_OV_CUTOFF_MV                       4150U
+#define BMS_CELL_OV_CUTOFF_MV                       4180U
 #define BMS_CELL_OV_RECOVER_MV                      4100U
 #define BMS_CELL_UV_CUTOFF_MV                       3500U
 #define BMS_CELL_UV_RECOVER_MV                      3600U
@@ -22,7 +22,7 @@
 #define BMS_BALANCE_MAX_TEMP_C                      45
 #define BMS_BALANCE_MAX_INTERNAL_TEMP_C             70
 #define BMS_BALANCE_INTERVAL_SEC                    20U
-#define BMS_BALANCE_MAX_ACTIVE_CELLS                1U
+#define BMS_BALANCE_MAX_ACTIVE_CELLS                9U
 
 #define BMS_CURRENT_DEADBAND_MA                     300L
 #define BMS_OVER_CURRENT_CHARGE                     1000
@@ -42,7 +42,7 @@
 /* Hardware 10S uses consecutive BQ cell channels VC0..VC10. */
 #define BMS_BQ_VCELL_MODE_10S                       0x03FFU
 #define BMS_BQ_SENSE_RESISTOR_UOHM                  500UL
-#define BMS_BQ_PROTECTION_DELAY_MS                  100U
+#define BMS_BQ_PROTECTION_DELAY_MS                  3000U
 #define BMS_CURRENT_CHARGE_IS_POSITIVE              1
 #define BMS_FLASH_SAVE_INTERVAL_MS                  600000UL
 #define BMS_FLASH_SAVE_DELTA_MAH                    100UL
@@ -100,6 +100,9 @@ typedef struct {
     bool     chargeFetEnabled;
     bool     dischargeFetEnabled;
     bool     fetsEnabled;
+    bool     bqChargeFetBlocked;
+    bool     bqDischargeFetBlocked;
+    uint16_t bqAlarmRawStatus;
 
     BMS_FaultFlags_t faults;
     bool     chargeDisabled;
