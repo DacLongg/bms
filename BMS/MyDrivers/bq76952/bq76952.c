@@ -1306,11 +1306,19 @@ bool bq76952_configurePowerOutputs(void)
 
 bool bq76952_prepareSleepWithReg2(void)
 {
-    bq76952_applyReg12Control(true, true);
-    bq76952_subCommand(SUBCMD_SLEEP_ENABLE);
-    HAL_Delay(1U);
     bq76952_battery_status_t batt_status;
-    batt_status = bq76952_getBatteryStatusRegister();
+    bq76952_applyReg12Control(true, true);
+    for(uint8_t count = 0; count < 10; count ++)
+    {
+        bq76952_subCommand(SUBCMD_SLEEP_ENABLE);
+        HAL_Delay(100U);
+        
+        batt_status = bq76952_getBatteryStatusRegister();
+        if(batt_status.bits.SLEEP_MODE != 0U)
+        {
+            break;
+        }
+    }
     return batt_status.bits.SLEEP_MODE != 0U;
 }
 
