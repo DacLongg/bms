@@ -15,6 +15,7 @@ void storage_flash_make_default(storage_flash_record_t *record)
     memset(record, 0, sizeof(*record));
     record->magic = STORAGE_FLASH_MAGIC;
     record->version = STORAGE_FLASH_VERSION;
+    record->currentCalibrationGainPpm = STORAGE_FLASH_CURRENT_CALIBRATION_DEFAULT_PPM;
     record->checksum = storage_flash_checksum(record);
 }
 
@@ -35,6 +36,9 @@ bool storage_flash_load(storage_flash_record_t *record)
     }
     if (record->checksum != storage_flash_checksum(record)) {
         return false;
+    }
+    if (record->currentCalibrationGainPpm == 0UL) {
+        record->currentCalibrationGainPpm = STORAGE_FLASH_CURRENT_CALIBRATION_DEFAULT_PPM;
     }
 
     return true;
@@ -85,10 +89,15 @@ bool storage_flash_save(const storage_flash_record_t *record)
 
 static uint32_t storage_flash_checksum(const storage_flash_record_t *record)
 {
-    const uint32_t *words = (const uint32_t *)record;
+    const uint32_t *words;
     uint32_t checksum = 0xA5A55A5AU;
     uint32_t word_count = sizeof(*record) / sizeof(uint32_t);
 
+    if (record == NULL) {
+        return checksum;
+    }
+
+    words = (const uint32_t *)record;
     for (uint32_t i = 0U; i < (word_count - 1U); ++i) {
         checksum ^= words[i] + 0x9E3779B9UL + (checksum << 6U) + (checksum >> 2U);
     }

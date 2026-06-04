@@ -30,6 +30,15 @@
 #define BQ_FET_STAT_DSG_FET         0x04U
 #define BQ_CHG_FET_PROTECTION_A_OCC 0x10U
 #define BQ_ALARM_MASK_WITH_WAKE     0xF801U
+#define BQ_CURRENT_CALIBRATION_DEFAULT_PPM 1000000UL
+#define BQ_CURRENT_CALIBRATION_PPM_DEN 1000000ULL
+#define BQ_CC_GAIN_DEFAULT_RAW      0x413F67F5UL
+#define BQ_CAPACITY_GAIN_DEFAULT_RAW 0x4A59C710UL
+#define BQ_IEEE754_SIGN_MASK        0x80000000UL
+#define BQ_IEEE754_EXP_MASK         0x7F800000UL
+#define BQ_IEEE754_MANT_MASK        0x007FFFFFUL
+#define BQ_IEEE754_MANT_HIDDEN_BIT  0x00800000UL
+#define BQ_IEEE754_MANT_OVERFLOW_BIT 0x01000000UL
 #define BQ_CB_CONFIG_CHARGE         0x01U
 #define BQ_CB_CONFIG_RELAX          0x02U
 #define BQ_CB_CONFIG_SLEEP          0x04U
@@ -109,6 +118,8 @@ static byte bq76952_calculateChecksum(const byte *data, uint16_t len);
 static byte bq76952_makeReg12Control(bool enable_reg1, bool enable_reg2);
 static void bq76952_applyReg12Control(bool enable_reg1, bool enable_reg2);
 static byte bq76952_make_pin_config(byte pin_fxn, bool active_low);
+static uint32_t bq76952_scaleIeee754RawByPpm(uint32_t raw_value, uint32_t gain_ppm);
+static bool bq76952_writeU32DataMemory(unsigned int addr, uint32_t raw_value);
 static unsigned int bq76952_userVoltageCommandToMv(byte command);
 static uint16_t bq76952_dataMemoryExpectedValue(int16_t data, byte noOfBytes);
 static bool bq76952_readDataMemoryBytes(unsigned int addr, byte *data, byte noOfBytes);
@@ -272,6 +283,67 @@ static byte bq76952_make_pin_config(byte pin_fxn, bool active_low)
         cfg |= 0x80U;
     }
     return cfg;
+}
+
+static uint32_t bq76952_scaleIeee754RawByPpm(uint32_t raw_value, uint32_t gain_ppm)
+{
+    uint32_t sign;
+    uint32_t exponent;
+    uint64_t mantissa;
+
+    if (gain_ppm == 0UL) {
+        gain_ppm = BQ_CURRENT_CALIBRATION_DEFAULT_PPM;
+    }
+
+    exponent = (raw_value & BQ_IEEE754_EXP_MASK) >> 23U;
+    if ((exponent == 0UL) || (exponent == 0xFFUL)) {
+        return raw_value;
+    }
+
+    sign = raw_value & BQ_IEEE754_SIGN_MASK;
+    mantissa = (uint64_t)BQ_IEEE754_MANT_HIDDEN_BIT |
+               (uint64_t)(raw_value & BQ_IEEE754_MANT_MASK);
+    mantissa = ((mantissa * (uint64_t)gain_ppm) +
+                (BQ_CURRENT_CALIBRATION_PPM_DEN / 2ULL)) /
+               BQ_CURRENT_CALIBRATION_PPM_DEN;
+
+    if (mantissa == 0ULL) {
+        return sign;
+    }
+
+    while (mantissa >= (uint64_t)BQ_IEEE754_MANT_OVERFLOW_BIT) {
+        mantissa = (mantissa + 1ULL) >> 1U;
+        exponent++;
+        if (exponent >= 0xFFUL) {
+            return sign | BQ_IEEE754_EXP_MASK;
+        }
+    }
+
+    while ((mantissa < (uint64_t)BQ_IEEE754_MANT_HIDDEN_BIT) && (exponent > 1UL)) {
+        mantissa <<= 1U;
+        exponent--;
+    }
+
+    if (mantissa < (uint64_t)BQ_IEEE754_MANT_HIDDEN_BIT) {
+        return sign;
+    }
+
+    return sign |
+           (uint32_t)(exponent << 23U) |
+           (uint32_t)(mantissa & BQ_IEEE754_MANT_MASK);
+}
+
+static bool bq76952_writeU32DataMemory(unsigned int addr, uint32_t raw_value)
+{
+    uint8_t status = 1U;
+
+    status &= (uint8_t)bq76952_writeDataMemory(addr,
+                                               (int16_t)(uint16_t)(raw_value & 0xFFFFUL),
+                                               2U);
+    status &= (uint8_t)bq76952_writeDataMemory(addr + 2U,
+                                               (int16_t)(uint16_t)((raw_value >> 16) & 0xFFFFUL),
+                                               2U);
+    return status != 0U;
 }
 
 static unsigned int bq76952_userVoltageCommandToMv(byte command)
@@ -1251,17 +1323,17 @@ bool bq76952_setDA_Config(void)
     return bq76952_writeDataMemory(DA_CONFIGURATION, BQ_DA_CONFIG_DEFAULT, 1U);
 }
 
-bool bq76952_setCurrentSenseCalibration(void)
+bool bq76952_setCurrentSenseCalibration(uint32_t gain_ppm)
 {
     uint8_t status = 1U;
+    uint32_t cc_gain_raw;
+    uint32_t capacity_gain_raw;
 
-    /* Field calibration: measured current was about 25% high
-     * (0.8 A actual read near 1.0 A), so use 80% of the nominal 0.5 mOhm gain.
-     */
-    status &= (uint8_t)bq76952_writeDataMemory(CC_GAIN, 0x67F5, 2U);
-    status &= (uint8_t)bq76952_writeDataMemory(CC_GAIN + 2U, 0x413F, 2U);
-    status &= (uint8_t)bq76952_writeDataMemory(CAPACITY_GAIN, (int16_t)(uint16_t)0xC710U, 2U);
-    status &= (uint8_t)bq76952_writeDataMemory(CAPACITY_GAIN + 2U, 0x4A59, 2U);
+    cc_gain_raw = bq76952_scaleIeee754RawByPpm(BQ_CC_GAIN_DEFAULT_RAW, gain_ppm);
+    capacity_gain_raw = bq76952_scaleIeee754RawByPpm(BQ_CAPACITY_GAIN_DEFAULT_RAW, gain_ppm);
+
+    status &= (uint8_t)bq76952_writeU32DataMemory(CC_GAIN, cc_gain_raw);
+    status &= (uint8_t)bq76952_writeU32DataMemory(CAPACITY_GAIN, capacity_gain_raw);
     return status != 0U;
 }
 

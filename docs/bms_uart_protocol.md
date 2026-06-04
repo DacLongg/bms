@@ -61,7 +61,7 @@ Request payload: empty.
 
 Response data after `STATUS`:
 
-Current `protocolVersion` is `0x03`.
+Current `protocolVersion` is `0x04`.
 
 | Offset | Type | Field |
 | --- | --- | --- |
@@ -263,3 +263,36 @@ The payload is ASCII `OTP!` and is required to avoid accidental OTP programming.
 Request payload: empty.
 
 Response data is the same layout as `0x20`, but no `OTP_WR_CHECK` or `OTP_WRITE` is issued. This reads the active BQ76952 configuration RAM/status snapshot. BQ76952 does not provide a raw direct-read of OTP contents; after boot, valid OTP contents are reflected through these data-memory/config fields.
+
+### `0x30` Calibrate Current
+
+Request payload:
+
+```text
+actualCurrent_mA:i32
+```
+
+Firmware reads the current BQ value, compares absolute current values, and calculates a new current calibration gain. If the BQ reading is zero, or the difference is greater than 30% of `actualCurrent_mA`, calibration fails and flash is not updated.
+
+Response data after `STATUS`:
+
+```text
+calStatus:u8
+actualCurrent_mA:i32
+measuredCurrent_mA:i32
+deviation_ppm:u32
+oldGain_ppm:u32
+newGain_ppm:u32
+```
+
+`STATUS=OK` means the new gain was written to BQ and saved to flash. `STATUS=Bad payload` means the input/current validation failed. `STATUS=Internal error` means writing BQ or flash failed.
+
+`calStatus`:
+
+| Value | Meaning |
+| --- | --- |
+| `0` | OK |
+| `1` | Bad actual current input |
+| `2` | BQ measured current is zero |
+| `3` | Difference is greater than 30% |
+| `4` | BQ or flash write failed |

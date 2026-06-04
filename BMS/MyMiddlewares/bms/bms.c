@@ -74,6 +74,7 @@ static void BMS_SyncStateWithFetAvailability(BMS_Tracking_t *tracking);
 static void BMS_UpdateCoulombCounter(BMS_Tracking_t *tracking, uint32_t dt_ms);
 static void BMS_UpdateBalancing(BMS_Tracking_t *tracking, uint32_t now);
 static void BMS_LoadPersistedData(BMS_Tracking_t *tracking);
+static bool BMS_SaveCurrentCalibration(uint32_t gain_ppm);
 static void BMS_SavePersistedDataIfNeeded(const BMS_Tracking_t *tracking, uint32_t now);
 #if BMS_DEBUG_LOG_ENABLE
 const char *BMS_StateName(BMS_State_t state);
@@ -83,6 +84,7 @@ static bool BMS_AllCellsAtOrAbove(const BMS_Tracking_t *tracking, uint16_t thres
 static bool BMS_AllTemperaturesAtOrBelow(const BMS_Tracking_t *tracking, int16_t threshold_C);
 static bool BMS_AllTemperaturesAtOrAbove(const BMS_Tracking_t *tracking, int16_t threshold_C);
 static int32_t BMS_AbsCurrent(int32_t current_mA);
+static uint32_t BMS_AbsCurrentU32(int32_t current_mA);
 
 void BMS_Init(void)
 {
@@ -163,6 +165,70 @@ bool BMS_IsFaultActive(void)
            g_bms_tracking.faults.shortCircuit ||
            g_bms_tracking.faults.bqSafetyFault ||
            g_bms_tracking.faults.communicationFault;
+}
+
+bool BMS_CalibrateCurrent(int32_t actual_mA, BMS_CurrentCalibrationResult_t *result)
+{
+    BMS_CurrentCalibrationResult_t local = {0};
+    uint32_t actual_abs;
+    uint32_t measured_abs;
+    uint32_t diff_abs;
+    uint32_t old_gain;
+    uint64_t numerator;
+
+    local.actual_mA = actual_mA;
+    local.measured_mA = (int32_t)bq76952_getCurrentAvg();
+    old_gain = g_bms_tracking.currentCalibrationGainPpm;
+    if (old_gain == 0UL) {
+        old_gain = BMS_CURRENT_CALIBRATION_DEFAULT_PPM;
+    }
+    local.oldGain_ppm = old_gain;
+    local.newGain_ppm = old_gain;
+
+    actual_abs = BMS_AbsCurrentU32(actual_mA);
+    measured_abs = BMS_AbsCurrentU32(local.measured_mA);
+
+    if (actual_abs == 0UL) {
+        local.status = BMS_CURRENT_CALIBRATION_BAD_INPUT;
+    } else if (measured_abs == 0UL) {
+        local.status = BMS_CURRENT_CALIBRATION_ZERO_READING;
+    } else {
+        diff_abs = (actual_abs > measured_abs) ?
+                   (actual_abs - measured_abs) :
+                   (measured_abs - actual_abs);
+        local.deviation_ppm = (uint32_t)((((uint64_t)diff_abs * 1000000ULL) +
+                                          ((uint64_t)actual_abs / 2ULL)) /
+                                         (uint64_t)actual_abs);
+
+        if (local.deviation_ppm > BMS_CURRENT_CALIBRATION_MAX_DEVIATION_PPM) {
+            local.status = BMS_CURRENT_CALIBRATION_DEVIATION_TOO_HIGH;
+        } else {
+            numerator = ((uint64_t)old_gain * (uint64_t)actual_abs) +
+                        ((uint64_t)measured_abs / 2ULL);
+            local.newGain_ppm = (uint32_t)(numerator / (uint64_t)measured_abs);
+            if ((local.newGain_ppm == 0UL) ||
+                !bq76952_setCurrentSenseCalibration(local.newGain_ppm) ||
+                !BMS_SaveCurrentCalibration(local.newGain_ppm)) {
+                local.status = BMS_CURRENT_CALIBRATION_WRITE_FAILED;
+            } else {
+                local.status = BMS_CURRENT_CALIBRATION_OK;
+            }
+        }
+    }
+
+    if (result != NULL) {
+        *result = local;
+    }
+
+    BMS_LOG_INFO("current cal status=%u actual=%ld measured=%ld dev=%lu old=%lu new=%lu",
+                 (unsigned int)local.status,
+                 (long)local.actual_mA,
+                 (long)local.measured_mA,
+                 (unsigned long)local.deviation_ppm,
+                 (unsigned long)local.oldGain_ppm,
+                 (unsigned long)local.newGain_ppm);
+
+    return local.status == BMS_CURRENT_CALIBRATION_OK;
 }
 
 void BMS_Error_Handler(void)
@@ -248,8 +314,6 @@ static void BMS_ResetTracking(void)
     g_bms_tracking.bqSleepMode = false;
     g_bms_tracking.bqSleepAllowed = false;
     g_bms_tracking.batSenseEnabled = false;
-    g_bms_tracking.batAdcRaw = 0U;
-    g_bms_tracking.batAdcPin_mV = 0U;
     g_bms_tracking.batAdcEstimatedPack_mV = 0U;
     g_bms_tracking.balanceRequired = false;
     g_bms_tracking.balanceMask = 0U;
@@ -258,6 +322,7 @@ static void BMS_ResetTracking(void)
     g_bms_tracking.chargeThroughput_mAh = 0UL;
     g_bms_tracking.dischargeThroughput_mAh = 0UL;
     g_bms_tracking.equivalentCycle_milliCycles = 0UL;
+    g_bms_tracking.currentCalibrationGainPpm = BMS_CURRENT_CALIBRATION_DEFAULT_PPM;
 }
 
 static void BMS_ConfigureMonitor(void)
@@ -270,7 +335,8 @@ static void BMS_ConfigureMonitor(void)
     BMS_BQ_CONFIG_STEP(config_ok, bq76952_configurePowerOutputs());
     BMS_BQ_CONFIG_STEP(config_ok, bq76952_setVcellMode(BMS_BQ_VCELL_MODE_10S));
     BMS_BQ_CONFIG_STEP(config_ok, bq76952_setDA_Config());
-    BMS_BQ_CONFIG_STEP(config_ok, bq76952_setCurrentSenseCalibration());
+    BMS_BQ_CONFIG_STEP(config_ok, bq76952_setCurrentSenseCalibration(
+                                  g_bms_tracking.currentCalibrationGainPpm));
     BMS_BQ_CONFIG_STEP(config_ok, bq76952_setEnableProtectionsA());
     BMS_BQ_CONFIG_STEP(config_ok, bq76952_setEnableProtectionsB());
     BMS_BQ_CONFIG_STEP(config_ok, bq76952_setEnableProtectionsC());
@@ -444,10 +510,10 @@ static void BMS_HandleHardwareSignals(BMS_Tracking_t *tracking, uint32_t now)
 
 static void BMS_UpdateBatteryAdc(BMS_Tracking_t *tracking, uint32_t now)
 {
-    uint32_t pin_mv;
     uint32_t pack_mv;
     uint64_t pack_num;
     uint64_t pack_den;
+    uint16_t batAdcRaw;
 
     if (tracking == NULL) {
         return;
@@ -470,13 +536,11 @@ static void BMS_UpdateBatteryAdc(BMS_Tracking_t *tracking, uint32_t now)
         return;
     }
 
-    tracking->batAdcRaw = (uint16_t)HAL_ADC_GetValue(&hadc);
+    batAdcRaw = (uint16_t)HAL_ADC_GetValue(&hadc);
     (void)HAL_ADC_Stop(&hadc);
     BMS_SetBatSenseEnable(false);
 
-    pin_mv = (((uint32_t)tracking->batAdcRaw * BMS_BAT_ADC_REF_MV) +
-              (BMS_BAT_ADC_COUNTS / 2UL)) / BMS_BAT_ADC_COUNTS;
-    pack_num = (uint64_t)tracking->batAdcRaw *
+    pack_num = (uint64_t)batAdcRaw *
                BMS_BAT_ADC_REF_MV *
                BMS_BAT_ADC_DIVIDER_NUM *
                BMS_BAT_ADC_CAL_NUM;
@@ -488,7 +552,6 @@ static void BMS_UpdateBatteryAdc(BMS_Tracking_t *tracking, uint32_t now)
         pack_mv = UINT16_MAX;
     }
 
-    tracking->batAdcPin_mV = (uint16_t)pin_mv;
     tracking->batAdcEstimatedPack_mV = (uint16_t)pack_mv;
 }
 
@@ -907,15 +970,53 @@ static void BMS_LoadPersistedData(BMS_Tracking_t *tracking)
     tracking->chargeThroughput_mAh = record.chargeThroughput_mAh;   // Note: discharge throughput and equivalent cycle may be inconsistent with charge throughput, but it's acceptable for estimation purpose
     tracking->dischargeThroughput_mAh = record.dischargeThroughput_mAh;
     tracking->equivalentCycle_milliCycles = record.equivalentCycle_milliCycles; // chu kì sạc xả
+    tracking->currentCalibrationGainPpm = (record.currentCalibrationGainPpm == 0UL) ?
+                                          BMS_CURRENT_CALIBRATION_DEFAULT_PPM :
+                                          record.currentCalibrationGainPpm;
     tracking->chargeAccumulated_mAs = (uint64_t)record.chargeThroughput_mAh * 3600ULL; // tích trữ mAs dựa trên charge throughput đã lưu, vì discharge throughput có thể không chính xác nếu có lỗi ghi flash trước đó
     tracking->dischargeAccumulated_mAs = (uint64_t)record.dischargeThroughput_mAh * 3600ULL;
     g_last_saved_charge_mAh = tracking->chargeThroughput_mAh;
     g_last_saved_discharge_mAh = tracking->dischargeThroughput_mAh;
 
-    BMS_LOG_INFO("flash load chg=%lu dch=%lu cyc=%lu",
+    BMS_LOG_INFO("flash load chg=%lu dch=%lu cyc=%lu cal=%lu",
                  (unsigned long)tracking->chargeThroughput_mAh,
                  (unsigned long)tracking->dischargeThroughput_mAh,
-                 (unsigned long)tracking->equivalentCycle_milliCycles);
+                 (unsigned long)tracking->equivalentCycle_milliCycles,
+                 (unsigned long)tracking->currentCalibrationGainPpm);
+}
+
+static bool BMS_SaveCurrentCalibration(uint32_t gain_ppm)
+{
+    storage_flash_record_t record;
+    storage_flash_record_t old_record;
+
+    if (gain_ppm == 0UL) {
+        return false;
+    }
+
+    storage_flash_make_default(&record);
+    if (storage_flash_load(&old_record)) {
+        record.writeCounter = old_record.writeCounter + 1U;
+    } else {
+        record.writeCounter = 1U;
+    }
+
+    record.chargeThroughput_mAh = g_bms_tracking.chargeThroughput_mAh;
+    record.dischargeThroughput_mAh = g_bms_tracking.dischargeThroughput_mAh;
+    record.equivalentCycle_milliCycles = g_bms_tracking.equivalentCycle_milliCycles;
+    record.nominalCapacity_mAh = BMS_NOMINAL_CAPACITY_MAH;
+    record.currentCalibrationGainPpm = gain_ppm;
+
+    if (!storage_flash_save(&record)) {
+        BMS_LOG_ERROR("flash save current cal failed");
+        return false;
+    }
+
+    g_bms_tracking.currentCalibrationGainPpm = gain_ppm;
+    g_last_flash_save_tick = HAL_GetTick();
+    g_last_saved_charge_mAh = g_bms_tracking.chargeThroughput_mAh;
+    g_last_saved_discharge_mAh = g_bms_tracking.dischargeThroughput_mAh;
+    return true;
 }
 
 static void BMS_SavePersistedDataIfNeeded(const BMS_Tracking_t *tracking, uint32_t now)
@@ -953,6 +1054,9 @@ static void BMS_SavePersistedDataIfNeeded(const BMS_Tracking_t *tracking, uint32
     record.dischargeThroughput_mAh = tracking->dischargeThroughput_mAh;
     record.equivalentCycle_milliCycles = tracking->equivalentCycle_milliCycles;
     record.nominalCapacity_mAh = BMS_NOMINAL_CAPACITY_MAH;
+    record.currentCalibrationGainPpm = (tracking->currentCalibrationGainPpm == 0UL) ?
+                                       BMS_CURRENT_CALIBRATION_DEFAULT_PPM :
+                                       tracking->currentCalibrationGainPpm;
 
     if (storage_flash_save(&record)) {
         g_last_flash_save_tick = now;
@@ -1034,6 +1138,14 @@ static int32_t BMS_AbsCurrent(int32_t current_mA)
         return -current_mA;
     }
     return current_mA;
+}
+
+static uint32_t BMS_AbsCurrentU32(int32_t current_mA)
+{
+    if (current_mA < 0) {
+        return (uint32_t)(-(current_mA + 1)) + 1UL;
+    }
+    return (uint32_t)current_mA;
 }
 
 bool BMS_Set_5V_Output(bool enabled)

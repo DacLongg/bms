@@ -27,9 +27,12 @@
 #define BMS_CURRENT_DEADBAND_MA                     300L
 #define BMS_OVER_CURRENT_CHARGE                     1000
 #define BMS_OVER_CURRENT_DISCHARGE                  75000L
+#define BMS_OVER_CURRENT_MA                         BMS_OVER_CURRENT_DISCHARGE
 #define BMS_OVER_CURRENT_RECOVERY_DELAY_MS          10000UL
 #define BMS_SHORT_CIRCUIT_MA                        120000L
 #define BMS_NOMINAL_CAPACITY_MAH                    20000UL
+#define BMS_CURRENT_CALIBRATION_DEFAULT_PPM         1000000UL
+#define BMS_CURRENT_CALIBRATION_MAX_DEVIATION_PPM   300000UL
 
 #define BMS_CHARGE_OT_CUTOFF_C                      45
 #define BMS_CHARGE_OT_RECOVER_C                     40
@@ -63,6 +66,23 @@ typedef enum {
     BMS_CURRENT_CHARGE,
     BMS_CURRENT_DISCHARGE
 } BMS_CurrentDirection_t;
+
+typedef enum {
+    BMS_CURRENT_CALIBRATION_OK = 0,
+    BMS_CURRENT_CALIBRATION_BAD_INPUT,
+    BMS_CURRENT_CALIBRATION_ZERO_READING,
+    BMS_CURRENT_CALIBRATION_DEVIATION_TOO_HIGH,
+    BMS_CURRENT_CALIBRATION_WRITE_FAILED
+} BMS_CurrentCalibrationStatus_t;
+
+typedef struct {
+    BMS_CurrentCalibrationStatus_t status;
+    int32_t actual_mA;
+    int32_t measured_mA;
+    uint32_t deviation_ppm;
+    uint32_t oldGain_ppm;
+    uint32_t newGain_ppm;
+} BMS_CurrentCalibrationResult_t;
 
 typedef struct {
     bool cellOverVoltage;
@@ -118,8 +138,6 @@ typedef struct {
     bool     bqSleepMode;
     bool     bqSleepAllowed;
     bool     batSenseEnabled;
-    uint16_t batAdcRaw;
-    uint16_t batAdcPin_mV;
     uint16_t batAdcEstimatedPack_mV;
     bool     balanceRequired;
     uint16_t balanceMask;
@@ -129,12 +147,14 @@ typedef struct {
     uint32_t chargeThroughput_mAh;
     uint32_t dischargeThroughput_mAh;
     uint32_t equivalentCycle_milliCycles;
+    uint32_t currentCalibrationGainPpm;
 } BMS_Tracking_t;
 
 void BMS_Init(void);
 void BMS_Update(void);
 const BMS_Tracking_t *BMS_GetTracking(void);
 bool BMS_IsFaultActive(void);
+bool BMS_CalibrateCurrent(int32_t actual_mA, BMS_CurrentCalibrationResult_t *result);
 void BMS_Error_Handler(void);
 void BMS_NotifyAlertInterrupt(void);
 void BMS_RequestShutdown(void);

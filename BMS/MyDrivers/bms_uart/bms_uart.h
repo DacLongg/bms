@@ -9,7 +9,7 @@
 
 #define BMS_UART_SOF0                         0xAAU
 #define BMS_UART_SOF1                         0x55U
-#define BMS_UART_PROTOCOL_VERSION             0x03U
+#define BMS_UART_PROTOCOL_VERSION             0x04U
 #define BMS_UART_MAX_PAYLOAD_SIZE             64U
 
 /*
@@ -29,7 +29,8 @@ typedef enum {
     BMS_UART_CMD_READ_LIMITS = 0x13U,
     BMS_UART_CMD_OTP_CHECK = 0x20U,
     BMS_UART_CMD_OTP_WRITE = 0x21U,
-    BMS_UART_CMD_OTP_READ = 0x22U
+    BMS_UART_CMD_OTP_READ = 0x22U,
+    BMS_UART_CMD_CALIBRATE_CURRENT = 0x30U
 } bms_uart_command_t;
 
 typedef enum {

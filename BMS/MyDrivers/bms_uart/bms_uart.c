@@ -72,13 +72,20 @@ static void bms_uart_handle_otp_write(uint8_t command,
                                       const uint8_t *payload,
                                       uint8_t length);
 static void bms_uart_handle_otp_read(uint8_t command, uint8_t length);
+static void bms_uart_handle_calibrate_current(uint8_t command,
+                                              const uint8_t *payload,
+                                              uint8_t length);
 static void bms_uart_send_otp_status(uint8_t command,
                                      const bq76952_otp_status_t *status);
+static void bms_uart_send_current_calibration_result(uint8_t command,
+                                                     bms_uart_status_t status,
+                                                     const BMS_CurrentCalibrationResult_t *result);
 static uint16_t bms_uart_fault_bitmap(const BMS_Tracking_t *tracking);
 static uint8_t bms_uart_fet_bitmap(const BMS_Tracking_t *tracking);
 static uint8_t bms_uart_gate_signal_bitmap(const BMS_Tracking_t *tracking);
 static uint16_t bms_uart_otp_flags(const bq76952_otp_status_t *status);
 static uint16_t bms_uart_crc16(const uint8_t *data, uint16_t length);
+static int32_t bms_uart_get_i32(const uint8_t *payload);
 static bool bms_uart_put_u8(uint8_t *payload, uint8_t *length, uint8_t value);
 static bool bms_uart_put_u16(uint8_t *payload, uint8_t *length, uint16_t value);
 static bool bms_uart_put_i16(uint8_t *payload, uint8_t *length, int16_t value);
@@ -281,6 +288,10 @@ static void bms_uart_handle_frame(uint8_t command,
 
     case BMS_UART_CMD_OTP_READ:
         bms_uart_handle_otp_read(command, length);
+        break;
+
+    case BMS_UART_CMD_CALIBRATE_CURRENT:
+        bms_uart_handle_calibrate_current(command, payload, length);
         break;
 
     default:
@@ -533,6 +544,44 @@ static void bms_uart_handle_otp_read(uint8_t command, uint8_t length)
     bms_uart_send_otp_status(command, &otp_status);
 }
 
+static void bms_uart_handle_calibrate_current(uint8_t command,
+                                              const uint8_t *payload,
+                                              uint8_t length)
+{
+    BMS_CurrentCalibrationResult_t result;
+    bms_uart_status_t status;
+    int32_t actual_mA;
+
+    if (length != 4U) {
+        bms_uart_send_status(command, BMS_UART_STATUS_BAD_LENGTH);
+        return;
+    }
+    if (payload == NULL) {
+        bms_uart_send_status(command, BMS_UART_STATUS_BAD_PAYLOAD);
+        return;
+    }
+
+    actual_mA = bms_uart_get_i32(payload);
+    (void)BMS_CalibrateCurrent(actual_mA, &result);
+
+    switch (result.status) {
+    case BMS_CURRENT_CALIBRATION_OK:
+        status = BMS_UART_STATUS_OK;
+        break;
+    case BMS_CURRENT_CALIBRATION_WRITE_FAILED:
+        status = BMS_UART_STATUS_INTERNAL_ERROR;
+        break;
+    case BMS_CURRENT_CALIBRATION_BAD_INPUT:
+    case BMS_CURRENT_CALIBRATION_ZERO_READING:
+    case BMS_CURRENT_CALIBRATION_DEVIATION_TOO_HIGH:
+    default:
+        status = BMS_UART_STATUS_BAD_PAYLOAD;
+        break;
+    }
+
+    bms_uart_send_current_calibration_result(command, status, &result);
+}
+
 static void bms_uart_send_otp_status(uint8_t command,
                                      const bq76952_otp_status_t *status)
 {
@@ -564,6 +613,28 @@ static void bms_uart_send_otp_status(uint8_t command,
     (void)bms_uart_put_u8(payload, &payload_len, status->dfetoffPinConfig);
 
     bms_uart_send_response(command, BMS_UART_STATUS_OK, payload, payload_len);
+}
+
+static void bms_uart_send_current_calibration_result(uint8_t command,
+                                                     bms_uart_status_t status,
+                                                     const BMS_CurrentCalibrationResult_t *result)
+{
+    uint8_t payload[BMS_UART_MAX_PAYLOAD_SIZE];
+    uint8_t payload_len = 0U;
+
+    if (result == NULL) {
+        bms_uart_send_status(command, BMS_UART_STATUS_INTERNAL_ERROR);
+        return;
+    }
+
+    (void)bms_uart_put_u8(payload, &payload_len, (uint8_t)result->status);
+    (void)bms_uart_put_i32(payload, &payload_len, result->actual_mA);
+    (void)bms_uart_put_i32(payload, &payload_len, result->measured_mA);
+    (void)bms_uart_put_u32(payload, &payload_len, result->deviation_ppm);
+    (void)bms_uart_put_u32(payload, &payload_len, result->oldGain_ppm);
+    (void)bms_uart_put_u32(payload, &payload_len, result->newGain_ppm);
+
+    bms_uart_send_response(command, status, payload, payload_len);
 }
 
 static uint16_t bms_uart_fault_bitmap(const BMS_Tracking_t *tracking)
@@ -662,6 +733,21 @@ static uint16_t bms_uart_crc16(const uint8_t *data, uint16_t length)
     }
 
     return crc;
+}
+
+static int32_t bms_uart_get_i32(const uint8_t *payload)
+{
+    uint32_t value;
+
+    if (payload == NULL) {
+        return 0;
+    }
+
+    value = (uint32_t)payload[0] |
+            ((uint32_t)payload[1] << 8) |
+            ((uint32_t)payload[2] << 16) |
+            ((uint32_t)payload[3] << 24);
+    return (int32_t)value;
 }
 
 static bool bms_uart_put_u8(uint8_t *payload, uint8_t *length, uint8_t value)

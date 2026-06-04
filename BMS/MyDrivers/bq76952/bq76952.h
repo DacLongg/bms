@@ -414,8 +414,8 @@ bool bq76952_configurePowerOutputs(void);
 void bq76952_prepareSleepWithReg2(void);
 /* Không cho BQ tự vào SLEEP nữa sau khi hệ thống thức. */
 void bq76952_resumeFromSleep(void);
-/* Cấu hình gain đo dòng cho shunt 0.5 mOhm trên board. */
-bool bq76952_setCurrentSenseCalibration(void);
+/* Cấu hình gain đo dòng cho shunt 0.5 mOhm trên board, scale theo ppm. */
+bool bq76952_setCurrentSenseCalibration(uint32_t gain_ppm);
 /* Cấu hình DA (digital/analog) block theo preset của thư viện. */
 bool bq76952_setDA_Config(void);
 /* Bỏ mask alert nhóm A để lỗi tương ứng có thể kéo chân ALERT. */
