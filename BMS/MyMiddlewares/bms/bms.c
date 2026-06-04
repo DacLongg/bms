@@ -67,6 +67,7 @@ static void BMS_SetBatSenseEnable(bool enabled);
 static void BMS_UpdateCellStatistics(BMS_Tracking_t *tracking);
 static void BMS_UpdateCurrentDirection(BMS_Tracking_t *tracking);
 static void BMS_UpdateFetStatus(BMS_Tracking_t *tracking);
+static void BMS_UpdateBqAlarmRawStatus(BMS_Tracking_t *tracking);
 static void BMS_UpdateFaultFlags(BMS_Tracking_t *tracking, uint32_t now);
 static void BMS_MergeBQFaultFlags(BMS_Tracking_t *tracking);
 static void BMS_UpdateState(BMS_Tracking_t *tracking);
@@ -452,7 +453,6 @@ static void BMS_HandleHardwareSignals(BMS_Tracking_t *tracking, uint32_t now)
     bool should_service_alert;
     bool alert_signal_active;
     unsigned int alarm_status;
-    unsigned int alarm_raw_status;
 
     if (tracking == NULL) {
         return;
@@ -482,10 +482,7 @@ static void BMS_HandleHardwareSignals(BMS_Tracking_t *tracking, uint32_t now)
     alarm_status = bq76952_getAlertStatusRegister();
     tracking->alertActive = alert_signal_active || (alarm_status != 0U);
     (void)bq76952_clearAlertStatusRegister((uint16_t)alarm_status);
-    alarm_raw_status = bq76952_getAlertRawStatusRegister();
-    tracking->bqAlarmRawStatus = (uint16_t)alarm_raw_status;
-    tracking->bqChargeFetBlocked = (alarm_raw_status & BMS_BQ_ALARM_RAW_XCHG) != 0U;
-    tracking->bqDischargeFetBlocked = (alarm_raw_status & BMS_BQ_ALARM_RAW_XDSG) != 0U;
+    BMS_UpdateBqAlarmRawStatus(tracking);
 }
 
 static bool BMS_IsAlertPinActive(void)
@@ -632,6 +629,20 @@ static void BMS_UpdateFetStatus(BMS_Tracking_t *tracking)
     tracking->fetsEnabled = bq76952_areFETs_Enabled();
 }
 
+static void BMS_UpdateBqAlarmRawStatus(BMS_Tracking_t *tracking)
+{
+    uint16_t alarm_raw_status;
+
+    if (tracking == NULL) {
+        return;
+    }
+
+    alarm_raw_status = (uint16_t)bq76952_getAlertRawStatusRegister();
+    tracking->bqAlarmRawStatus = alarm_raw_status;
+    tracking->bqChargeFetBlocked = (alarm_raw_status & BMS_BQ_ALARM_RAW_XCHG) != 0U;
+    tracking->bqDischargeFetBlocked = (alarm_raw_status & BMS_BQ_ALARM_RAW_XDSG) != 0U;
+}
+
 static void BMS_UpdateFaultFlags(BMS_Tracking_t *tracking, uint32_t now)
 {
     int32_t abs_current;
@@ -706,8 +717,11 @@ static void BMS_UpdateFaultFlags(BMS_Tracking_t *tracking, uint32_t now)
                 g_charge_oc_recovery_pending = true;
                 g_charge_oc_recovery_tick = now;
             } else if ((now - g_charge_oc_recovery_tick) >= BMS_OVER_CURRENT_RECOVERY_DELAY_MS) {
-                tracking->faults.chargeOverCurrent = false;
-                g_charge_oc_recovery_pending = false;
+                BMS_UpdateBqAlarmRawStatus(tracking);
+                if (!tracking->bqChargeFetBlocked) {
+                    tracking->faults.chargeOverCurrent = false;
+                    g_charge_oc_recovery_pending = false;
+                }
             }
         } else {
             g_charge_oc_recovery_pending = false;
@@ -718,8 +732,11 @@ static void BMS_UpdateFaultFlags(BMS_Tracking_t *tracking, uint32_t now)
                 g_discharge_oc_recovery_pending = true;
                 g_discharge_oc_recovery_tick = now;
             } else if ((now - g_discharge_oc_recovery_tick) >= BMS_OVER_CURRENT_RECOVERY_DELAY_MS) {
-                tracking->faults.dischargeOverCurrent = false;
-                g_discharge_oc_recovery_pending = false;
+                BMS_UpdateBqAlarmRawStatus(tracking);
+                if (!tracking->bqDischargeFetBlocked) {
+                    tracking->faults.dischargeOverCurrent = false;
+                    g_discharge_oc_recovery_pending = false;
+                }
             }
         } else {
             g_discharge_oc_recovery_pending = false;
@@ -837,40 +854,7 @@ static void BMS_ApplyFetPolicy(BMS_Tracking_t *tracking)
 
 static void BMS_SyncStateWithFetAvailability(BMS_Tracking_t *tracking)
 {
-    uint16_t alarm_raw_status;
-    bool charge_blocked;
-    bool discharge_blocked;
-
-    if (tracking == NULL) {
-        return;
-    }
-
-    alarm_raw_status = (uint16_t)bq76952_getAlertRawStatusRegister();
-    tracking->bqAlarmRawStatus = alarm_raw_status;
-    tracking->bqChargeFetBlocked = (alarm_raw_status & BMS_BQ_ALARM_RAW_XCHG) != 0U;
-    tracking->bqDischargeFetBlocked = (alarm_raw_status & BMS_BQ_ALARM_RAW_XDSG) != 0U;
-
-    if (tracking->state != BMS_STATE_NORMAL) {
-        return;
-    }
-
-    charge_blocked = tracking->bqChargeFetBlocked || !tracking->chargeFetEnabled;
-    discharge_blocked = tracking->bqDischargeFetBlocked || !tracking->dischargeFetEnabled;
-
-    if (!charge_blocked && !discharge_blocked) {
-        return;
-    }
-
-    tracking->chargeDisabled = charge_blocked;
-    tracking->dischargeDisabled = discharge_blocked;
-
-    if (charge_blocked && discharge_blocked) {
-        tracking->state = BMS_STATE_FAULT;
-    } else if (charge_blocked) {
-        tracking->state = BMS_STATE_CHARGE_PROTECT;
-    } else {
-        tracking->state = BMS_STATE_DISCHARGE_PROTECT;
-    }
+    BMS_UpdateBqAlarmRawStatus(tracking);
 }
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
