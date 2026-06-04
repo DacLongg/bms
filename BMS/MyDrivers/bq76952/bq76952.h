@@ -411,7 +411,7 @@ bool bq76952_setEnablePreRegulator(void);
 /* Bật REG0, REG1 và REG2 theo nguồn trên board. */
 bool bq76952_configurePowerOutputs(void);
 /* Cho phép BQ vào SLEEP tự động nhưng giữ REG2 cấp nguồn hệ thống. */
-void bq76952_prepareSleepWithReg2(void);
+bool bq76952_prepareSleepWithReg2(void);
 /* Không cho BQ tự vào SLEEP nữa sau khi hệ thống thức. */
 void bq76952_resumeFromSleep(void);
 /* Cấu hình gain đo dòng cho shunt 0.5 mOhm trên board, scale theo ppm. */

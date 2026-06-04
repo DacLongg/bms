@@ -9,26 +9,26 @@
 #include "debug_log.h"
 #include "storage_flash.h"
 
-#define BMS_ALERT_POLL_FALLBACK_MS 1000U
-#define BMS_SHUT_HOLD_MS 1100U
-#define BMS_BAT_ADC_SAMPLE_MS 1000U
-#define BMS_BAT_ADC_SETTLE_MS 5U
-#define BMS_FET_STATUS_SETTLE_MS 2U
-#define BMS_BQ_FET_STAT_CHG_FET 0x01U
-#define BMS_BQ_FET_STAT_DSG_FET 0x04U
-#define BMS_BQ_ALARM_RAW_XCHG 0x0040U
-#define BMS_BQ_ALARM_RAW_XDSG 0x0020U
-#define BMS_BQ_OCC_RECOVERY_THRESHOLD_MA 0
+#define BMS_ALERT_POLL_FALLBACK_MS              1000U
+#define BMS_SHUT_HOLD_MS                        1100U
+#define BMS_BAT_ADC_SAMPLE_MS                   1000U
+#define BMS_BAT_ADC_SETTLE_MS                   5U
+#define BMS_FET_STATUS_SETTLE_MS                2U
+#define BMS_BQ_FET_STAT_CHG_FET                 0x01U
+#define BMS_BQ_FET_STAT_DSG_FET                 0x04U
+#define BMS_BQ_ALARM_RAW_XCHG                   0x0040U
+#define BMS_BQ_ALARM_RAW_XDSG                   0x0020U
+#define BMS_BQ_OCC_RECOVERY_THRESHOLD_MA        0
 #define BMS_BQ_RECOVERY_TIME_SEC ((BMS_OVER_CURRENT_RECOVERY_DELAY_MS + 999UL) / 1000UL)
-#define BMS_BAT_ADC_REF_MV 3300UL
-#define BMS_BAT_ADC_COUNTS 4095UL
-#define BMS_BAT_ADC_DIVIDER_NUM 678300UL
-#define BMS_BAT_ADC_DIVIDER_DEN 13300UL
+#define BMS_BAT_ADC_REF_MV                      3300UL
+#define BMS_BAT_ADC_COUNTS                      4095UL
+#define BMS_BAT_ADC_DIVIDER_NUM                 678300UL
+#define BMS_BAT_ADC_DIVIDER_DEN                 13300UL
 /* Calibration for BAT_ADC divider tolerance.
  * Latest log: cell-sum pack ~= 37985 mV while ADC estimate ~= 39780 mV.
  */
-#define BMS_BAT_ADC_CAL_NUM 955UL
-#define BMS_BAT_ADC_CAL_DEN 1000UL
+#define BMS_BAT_ADC_CAL_NUM                     955UL
+#define BMS_BAT_ADC_CAL_DEN                     1000UL
 
 #define BMS_BQ_CONFIG_STEP(ok_var, expr) \
     do { \
@@ -283,46 +283,46 @@ static void BMS_ResetTracking(void)
         g_bms_tracking.temperature[i] = 0;
     }
 
-    g_bms_tracking.initialized = false;
-    g_bms_tracking.connected = false;
-    g_bms_tracking.state = BMS_STATE_INIT;
-    g_bms_tracking.currentDirection = BMS_CURRENT_IDLE;
-    g_bms_tracking.circle_counter = 0U;
-    g_bms_tracking.stackVoltage = 0U;
-    g_bms_tracking.packVoltage = 0U;
-    g_bms_tracking.minCellVoltage = 0U;
-    g_bms_tracking.maxCellVoltage = 0U;
-    g_bms_tracking.averageCellVoltage = 0U;
-    g_bms_tracking.deltaCellVoltage = 0U;
-    g_bms_tracking.current_mA = 0;
-    g_bms_tracking.charging = false;
-    g_bms_tracking.discharging = false;
-    g_bms_tracking.chargeFetEnabled = false;
-    g_bms_tracking.dischargeFetEnabled = false;
-    g_bms_tracking.fetsEnabled = false;
-    g_bms_tracking.bqChargeFetBlocked = false;
-    g_bms_tracking.bqDischargeFetBlocked = false;
-    g_bms_tracking.bqAlarmRawStatus = 0U;
-    g_bms_tracking.faults = (BMS_FaultFlags_t){0};
-    g_bms_tracking.chargeDisabled = true;
-    g_bms_tracking.dischargeDisabled = true;
-    g_bms_tracking.chargeGateFaultSignal = false;
+    g_bms_tracking.initialized          = false;
+    g_bms_tracking.connected            = false;
+    g_bms_tracking.state                = BMS_STATE_INIT;
+    g_bms_tracking.currentDirection     = BMS_CURRENT_IDLE;
+    g_bms_tracking.circle_counter       = 0U;
+    g_bms_tracking.stackVoltage         = 0U;
+    g_bms_tracking.packVoltage          = 0U;
+    g_bms_tracking.minCellVoltage       = 0U;
+    g_bms_tracking.maxCellVoltage       = 0U;
+    g_bms_tracking.averageCellVoltage   = 0U;
+    g_bms_tracking.deltaCellVoltage     = 0U;
+    g_bms_tracking.current_mA           = 0;
+    g_bms_tracking.charging             = false;
+    g_bms_tracking.discharging          = false;
+    g_bms_tracking.chargeFetEnabled     = false;
+    g_bms_tracking.dischargeFetEnabled  = false;
+    g_bms_tracking.fetsEnabled          = false;
+    g_bms_tracking.bqChargeFetBlocked   = false;
+    g_bms_tracking.bqDischargeFetBlocked    = false;
+    g_bms_tracking.bqAlarmRawStatus         = 0U;
+    g_bms_tracking.faults                   = (BMS_FaultFlags_t){0};
+    g_bms_tracking.chargeDisabled           = true;
+    g_bms_tracking.dischargeDisabled        = true;
+    g_bms_tracking.chargeGateFaultSignal    = false;
     g_bms_tracking.dischargeGateFaultSignal = false;
-    g_bms_tracking.fetOffAsserted = false;
-    g_bms_tracking.alertActive = false;
-    g_bms_tracking.alertCounter = 0UL;
-    g_bms_tracking.bqSleepMode = false;
-    g_bms_tracking.bqSleepAllowed = false;
-    g_bms_tracking.batSenseEnabled = false;
-    g_bms_tracking.batAdcEstimatedPack_mV = 0U;
-    g_bms_tracking.balanceRequired = false;
-    g_bms_tracking.balanceMask = 0U;
-    g_bms_tracking.chargeAccumulated_mAs = 0ULL;
+    g_bms_tracking.fetOffAsserted           = false;
+    g_bms_tracking.alertActive              = false;
+    g_bms_tracking.alertCounter             = 0UL;
+    g_bms_tracking.bqSleepMode              = false;
+    g_bms_tracking.bqSleepAllowed           = false;
+    g_bms_tracking.batSenseEnabled          = false;
+    g_bms_tracking.batAdcEstimatedPack_mV   = 0U;
+    g_bms_tracking.balanceRequired          = false;
+    g_bms_tracking.balanceMask              = 0U;
+    g_bms_tracking.chargeAccumulated_mAs    = 0ULL;
     g_bms_tracking.dischargeAccumulated_mAs = 0ULL;
-    g_bms_tracking.chargeThroughput_mAh = 0UL;
-    g_bms_tracking.dischargeThroughput_mAh = 0UL;
-    g_bms_tracking.equivalentCycle_milliCycles = 0UL;
-    g_bms_tracking.currentCalibrationGainPpm = BMS_CURRENT_CALIBRATION_DEFAULT_PPM;
+    g_bms_tracking.chargeThroughput_mAh     = 0UL;
+    g_bms_tracking.dischargeThroughput_mAh  = 0UL;
+    g_bms_tracking.equivalentCycle_milliCycles  = 0UL;
+    g_bms_tracking.currentCalibrationGainPpm    = BMS_CURRENT_CALIBRATION_DEFAULT_PPM;
 }
 
 static void BMS_ConfigureMonitor(void)
@@ -351,30 +351,7 @@ static void BMS_ConfigureMonitor(void)
     BMS_BQ_CONFIG_STEP(config_ok, bq76952_setCellInterconnectResistances());
     BMS_BQ_CONFIG_STEP(config_ok, bq76952_setEnableTS1());
     BMS_BQ_CONFIG_STEP(config_ok, bq76952_setEnableTS3());
-#if BMS_DEBUG_LOG_ENABLE
-    {
-        bq76952_write_verify_t verify;
-        uint16_t ts1_cfg = (uint16_t)bq76952_readDataMemory(TS1_CONFIG, 1);
-        uint16_t ts3_cfg = (uint16_t)bq76952_readDataMemory(TS3_CONFIG, 1);
 
-        if (bq76952_getLastWriteVerify(&verify)) {
-            if (verify.verified) {
-                BMS_LOG_INFO("bq write ok addr=0x%04lx val=0x%04x",
-                             (unsigned long)verify.addr,
-                             verify.expected);
-            } else {
-                BMS_LOG_ERROR("bq write fail addr=0x%04lx exp=0x%04x got=0x%04x i2c=%u cfg=%u rd=%u",
-                              (unsigned long)verify.addr,
-                              verify.expected,
-                              verify.actual,
-                              verify.i2cOk ? 1U : 0U,
-                              verify.configUpdateOk ? 1U : 0U,
-                              verify.readbackOk ? 1U : 0U);
-            }
-        }
-        BMS_LOG_INFO("bq ts cfg ts1=0x%02x ts3=0x%02x", ts1_cfg, ts3_cfg);
-    }
-#endif
     BMS_BQ_CONFIG_STEP(config_ok, bq76952_setAlertPinConfig());
     BMS_BQ_CONFIG_STEP(config_ok, bq76952_setDFETOFFPinConfig(true, false));
     BMS_BQ_CONFIG_STEP(config_ok, bq76952_setDCHGPinConfig(false));

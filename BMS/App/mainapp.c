@@ -127,7 +127,7 @@ void mainapp(void)
     static bool initialized = false;
     static uint32_t last_update_tick = 0U;
     static uint32_t last_activity_tick = 0U;
-    static bool allow_immediate_sleep = false;
+    // static bool allow_immediate_sleep = false;
     uint32_t now;
     const BMS_Tracking_t *tracking;
 
@@ -156,11 +156,11 @@ void mainapp(void)
 
         if (MainApp_HasChargeDischargeActivity(tracking)) {
             last_activity_tick = now;
-            allow_immediate_sleep = false;
+            // allow_immediate_sleep = false;
         }
 
         if (MainApp_IsPackSleepEligible(tracking) &&
-            (allow_immediate_sleep || ((now - last_activity_tick) >= MAINAPP_IDLE_BEFORE_SLEEP_MS))) {
+            (((now - last_activity_tick) >= MAINAPP_IDLE_BEFORE_SLEEP_MS))) {
             power_manager_wakeup_source_t wake_source;
             HAL_StatusTypeDef sleep_rc;
 
@@ -168,39 +168,45 @@ void mainapp(void)
                          tracking->bqSleepMode ? 1U : 0U,
                          (unsigned long)(now - last_activity_tick));
             (void)bq76952_clearAlertStatusRegister(0xFFFFU);
-            bq76952_prepareSleepWithReg2();
-            Disable_Power_Battery();
-            sleep_rc = power_manager_enter_low_power_sleep(MAINAPP_SLEEP_WAKEUP_MS);
-            wake_source = power_manager_get_and_clear_wakeup_source();
-            Enable_Power_Battery();
-            bq76952_resumeFromSleep();
-            BMS_Update();
-            bms_uart_task();
-            now = HAL_GetTick();
-            last_update_tick = now;
+            if (bq76952_prepareSleepWithReg2() == true)
+            {
+                Disable_Power_Battery();
+                sleep_rc = power_manager_enter_low_power_sleep(MAINAPP_SLEEP_WAKEUP_MS);
+                wake_source = power_manager_get_and_clear_wakeup_source();
+                Enable_Power_Battery();
+                bq76952_resumeFromSleep();
+                BMS_Update();
+                bms_uart_task();
+                now = HAL_GetTick();
+                last_update_tick = now;
 
-            if (sleep_rc != HAL_OK) {
-                allow_immediate_sleep = false;
+                if (sleep_rc != HAL_OK) {
+                    // allow_immediate_sleep = false;
+                    BMS_LOG_ERROR("sleep enter failed");
+                    return;
+                }
+
+                if ((wake_source & POWER_MANAGER_WAKEUP_GPIO) != 0U) {
+                    // allow_immediate_sleep = false;
+                    last_activity_tick = now;
+                    BMS_LOG_INFO("wake gpio");
+                } else if ((wake_source & POWER_MANAGER_WAKEUP_UART) != 0U) {
+                    // allow_immediate_sleep = false;
+                    last_activity_tick = now;
+                    BMS_LOG_INFO("wake uart");
+                } else if ((wake_source & POWER_MANAGER_WAKEUP_RTC) != 0U) {
+                    // allow_immediate_sleep = true;
+                    BMS_LOG_INFO("wake rtc");
+                } else {
+                    // allow_immediate_sleep = false;
+                    last_activity_tick = now;
+                    BMS_LOG_WARN("wake unknown");
+                }
+            }
+            else{
                 BMS_LOG_ERROR("sleep enter failed");
-                return;
             }
-
-            if ((wake_source & POWER_MANAGER_WAKEUP_GPIO) != 0U) {
-                allow_immediate_sleep = false;
-                last_activity_tick = now;
-                BMS_LOG_INFO("wake gpio");
-            } else if ((wake_source & POWER_MANAGER_WAKEUP_UART) != 0U) {
-                allow_immediate_sleep = false;
-                last_activity_tick = now;
-                BMS_LOG_INFO("wake uart");
-            } else if ((wake_source & POWER_MANAGER_WAKEUP_RTC) != 0U) {
-                allow_immediate_sleep = true;
-                BMS_LOG_INFO("wake rtc");
-            } else {
-                allow_immediate_sleep = false;
-                last_activity_tick = now;
-                BMS_LOG_WARN("wake unknown");
-            }
+            
         }
         BMS_LOG_INFO("update done state=%s chgDis=%s dchDis=%s faults:Ov:%s, Uv:%s, Ot:%s,Dt:%s,Ut:%s,",
                      BMS_StateName(tracking->state),

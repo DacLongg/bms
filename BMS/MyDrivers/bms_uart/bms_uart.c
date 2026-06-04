@@ -142,7 +142,6 @@ static void bms_uart_start_rx(void)
     if (g_bms_uart == NULL) {
         return;
     }
-
     (void)HAL_UART_Receive_IT(g_bms_uart, &g_rx_byte, 1U);
 }
 
@@ -355,9 +354,7 @@ static void bms_uart_send_frame(uint8_t command,
     (void)HAL_UART_Transmit(g_bms_uart, tx, frame_length, BMS_UART_TX_TIMEOUT_MS);
 }
 
-static void bms_uart_handle_ping(uint8_t command,
-                                 const uint8_t *payload,
-                                 uint8_t length)
+static void bms_uart_handle_ping(uint8_t command, const uint8_t *payload, uint8_t length)
 {
     if (length > (BMS_UART_MAX_PAYLOAD_SIZE - 1U)) {
         bms_uart_send_status(command, BMS_UART_STATUS_BAD_LENGTH);
