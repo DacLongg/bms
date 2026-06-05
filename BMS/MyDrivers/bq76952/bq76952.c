@@ -104,10 +104,8 @@ static uint16_t g_unseal_key_step_2;
 static uint16_t g_full_access_key_step_1;
 static uint16_t g_full_access_key_step_2;
 static bq76952_write_verify_t g_last_write_verify;
-/* Board 10S routes cells consecutively from VC0 to VC10. */
-// static const byte g_connected_cell_to_vc_bit[10] = {
-//     0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 9U
-// };
+
+BQ76952_RawInfo_t BQ_RawInfo;
 
 static bool bq76952_write_register(byte reg, const byte *data, uint16_t len);
 static bool bq76952_read_register(byte reg, byte *data, uint16_t len);
@@ -156,11 +154,9 @@ static bool bq76952_read_register(byte reg, byte *data, uint16_t len)
 static unsigned int bq76952_directCommand(byte command)
 {
     byte data[2] = {0};
-
     if (!bq76952_read_register(command, data, 2U)) {
         return 0U;
     }
-
     return (unsigned int)(((unsigned int)data[1] << 8) | data[0]);
 }
 
@@ -437,43 +433,31 @@ static bool bq76952_writeDataMemory(unsigned int addr, int16_t data, byte noOfBy
     byte readback[2] = {0};
     uint16_t actual = 0U;
     uint16_t expected = bq76952_dataMemoryExpectedValue(data, noOfBytes);
-
-    g_last_write_verify = (bq76952_write_verify_t){
-        .attempted = true,
-        .i2cOk = false,
-        .configUpdateOk = false,
-        .readbackOk = false,
-        .verified = false,
-        .addr = addr,
-        .expected = expected,
-        .actual = 0U,
-        .size = noOfBytes
-    };
+    bool Status;
 
     if ((noOfBytes != 1U) && (noOfBytes != 2U)) {
         return false;
     }
 
     bq76952_enterConfigUpdate();
-    g_last_write_verify.configUpdateOk = bq76952_waitConfigUpdateMode(true, BQ_CONFIG_UPDATE_TIMEOUT_MS);
-    if (g_last_write_verify.configUpdateOk) {
-        g_last_write_verify.i2cOk = bq76952_writeDataMemoryPayload(addr, data, noOfBytes);
-        if (g_last_write_verify.i2cOk) {
+    Status = bq76952_waitConfigUpdateMode(true, BQ_CONFIG_UPDATE_TIMEOUT_MS);
+    if (Status == true) {
+        Status = bq76952_writeDataMemoryPayload(addr, data, noOfBytes);
+        if (Status == true) {
             HAL_Delay(2U);
-            g_last_write_verify.readbackOk = bq76952_readDataMemoryBytes(addr, readback, noOfBytes);
-            if (g_last_write_verify.readbackOk) {
+            Status = bq76952_readDataMemoryBytes(addr, readback, noOfBytes);
+            if (Status == true) {
                 actual = (noOfBytes == 1U) ?
                          (uint16_t)readback[0] :
                          (uint16_t)(((uint16_t)readback[1] << 8) | readback[0]);
-                g_last_write_verify.actual = actual;
-                g_last_write_verify.verified = (actual == expected);
+                Status = (actual == expected);
             }
         }
     }
 
     bq76952_exitConfigUpdate();
     (void)bq76952_waitConfigUpdateMode(false, BQ_CONFIG_UPDATE_TIMEOUT_MS);
-    return g_last_write_verify.verified;
+    return Status;
 }
 
 /* Temperature protection limits are I1 values in degrees Celsius. */
@@ -1020,12 +1004,14 @@ bool bq76952_isDischarging(void)
 
 bool bq76952_isChargeFetOn(void)
 {
-    return (bq76952_getFetStatusRaw() & BQ_FET_STAT_CHG_FET) != 0U;
+    BQ_RawInfo.FetStatus.all = bq76952_getFetStatusRaw();
+    return BQ_RawInfo.FetStatus.bit.CHG_FET;
 }
 
 bool bq76952_isDischargeFetOn(void)
 {
-    return (bq76952_getFetStatusRaw() & BQ_FET_STAT_DSG_FET) != 0U;
+    BQ_RawInfo.FetStatus.all = bq76952_getFetStatusRaw();
+    return BQ_RawInfo.FetStatus.bit.DSG_FET;
 }
 
 bool bq76952_setCellBalancingEnabled(bool enabled)

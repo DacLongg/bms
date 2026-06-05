@@ -13,6 +13,13 @@ extern "C" {
 
 typedef uint8_t byte;
 
+typedef enum
+{
+    BQ_OK,
+    ERR_CFUDT,
+    ERR_I2C
+}RETURN_STATUS;
+
 /* Các đầu đo nhiệt mà IC có thể đọc trực tiếp.
  * TS1..TS3 là các chân thermistor ngoài.
  * HDQ/DCHG/DDSG là các kênh nhiệt độ nội bộ hoặc suy ra từ mạch FET theo sơ đồ phần cứng của BQ76952.
@@ -178,6 +185,9 @@ typedef union {
     } bits;
 } bq76952_protection_t;
 
+/* ==========================================================
+ * 0x62 0x64 0x66 Alarm Status, Raw Status, Enable
+ * ========================================================== */
 typedef union {
     uint16_t raw;
     struct
@@ -200,6 +210,151 @@ typedef union {
         uint16_t RESERVED15    : 1;  // Bit 15
     } bit;
 } bq76952_AlamStatus_t;
+/* ==========================================================
+ * 0x02 Safety Alert A
+ * ========================================================== */
+typedef union
+{
+    uint8_t all;
+
+    struct
+    {
+        uint8_t RSVD0 : 1;   // Bit 0
+        uint8_t RSVD1 : 1;   // Bit 1
+        uint8_t CUV   : 1;   // Bit 2
+        uint8_t COV   : 1;   // Bit 3
+        uint8_t OCC   : 1;   // Bit 4
+        uint8_t OCD1  : 1;   // Bit 5
+        uint8_t OCD2  : 1;   // Bit 6
+        uint8_t SCD   : 1;   // Bit 7
+    } bit;
+
+} BQ76952_SafetyAlertA_t;
+
+/* ==========================================================
+ * 0x03 Safety Status A
+ * ========================================================== */
+typedef union
+{
+    uint8_t all;
+
+    struct
+    {
+        uint8_t RSVD0 : 1;
+        uint8_t RSVD1 : 1;
+        uint8_t CUV   : 1;
+        uint8_t COV   : 1;
+        uint8_t OCC   : 1;
+        uint8_t OCD1  : 1;
+        uint8_t OCD2  : 1;
+        uint8_t SCD   : 1;
+    } bit;
+
+} BQ76952_SafetyStatusA_t;
+
+/* ==========================================================
+ * 0x04 Safety Alert B
+ * ========================================================== */
+typedef union
+{
+    uint8_t all;
+
+    struct
+    {
+        uint8_t UTC    : 1;  // Bit 0
+        uint8_t UTD    : 1;  // Bit 1
+        uint8_t UTINT  : 1;  // Bit 2
+        uint8_t RSVD3  : 1;  // Bit 3
+        uint8_t OTC    : 1;  // Bit 4
+        uint8_t OTD    : 1;  // Bit 5
+        uint8_t OTINT  : 1;  // Bit 6
+        uint8_t OTF    : 1;  // Bit 7
+    } bit;
+
+} BQ76952_SafetyAlertB_t;
+
+/* ==========================================================
+ * 0x05 Safety Status B
+ * ========================================================== */
+typedef union
+{
+    uint8_t all;
+
+    struct
+    {
+        uint8_t UTC    : 1;
+        uint8_t UTD    : 1;
+        uint8_t UTINT  : 1;
+        uint8_t RSVD3  : 1;
+        uint8_t OTC    : 1;
+        uint8_t OTD    : 1;
+        uint8_t OTINT  : 1;
+        uint8_t OTF    : 1;
+    } bit;
+
+} BQ76952_SafetyStatusB_t;
+
+/* ==========================================================
+ * 0x06 Safety Alert C
+ * ========================================================== */
+typedef union
+{
+    uint8_t all;
+
+    struct
+    {
+        uint8_t RSVD0 : 1;
+        uint8_t RSVD1 : 1;
+        uint8_t RSVD2 : 1;
+        uint8_t PTOS  : 1;  // Bit 3
+        uint8_t COVL  : 1;  // Bit 4
+        uint8_t OCDL  : 1;  // Bit 5
+        uint8_t SCDL  : 1;  // Bit 6
+        uint8_t OCD3  : 1;  // Bit 7
+    } bit;
+
+} BQ76952_SafetyAlertC_t;
+
+/* ==========================================================
+ * 0x07 Safety Status C
+ * ========================================================== */
+typedef union
+{
+    uint8_t all;
+    struct
+    {
+        uint8_t RSVD0 : 1;
+        uint8_t HWDF  : 1;  // Bit 1
+        uint8_t PTO   : 1;  // Bit 2
+        uint8_t RSVD3 : 1;  // Bit 3
+        uint8_t COVL  : 1;  // Bit 4
+        uint8_t OCDL  : 1;  // Bit 5
+        uint8_t SCDL  : 1;  // Bit 6
+        uint8_t OCD3  : 1;  // Bit 7
+    } bit;
+
+} BQ76952_SafetyStatusC_t;
+
+/* ==========================================================
+ * 0x7F FET Status
+ * ========================================================== */
+typedef union
+{
+    uint8_t all;
+
+    struct
+    {
+        uint8_t CHG_FET  : 1;   // Bit0
+        uint8_t PCHG_FET : 1;   // Bit1
+        uint8_t DSG_FET  : 1;   // Bit2
+        uint8_t PDSG_FET : 1;   // Bit3
+        uint8_t DCHG_PIN : 1;   // Bit4
+        uint8_t DDSG_PIN : 1;   // Bit5
+        uint8_t ALRT_PIN : 1;   // Bit6
+        uint8_t RSVD     : 1;   // Bit7
+    } bit;
+
+} BQ76952_FETStatus_t;
 
 /* Các cờ cảnh báo thuộc Safety Alert C. Đây là cảnh báo/latched alert,
  * hữu ích để biết lý do lỗi đã từng xuất hiện ngay cả khi trạng thái tức thời đã mất.
@@ -242,37 +397,21 @@ typedef union {
 /* Battery Status là thanh ghi trạng thái hệ thống mức cao của BQ76952. */
 typedef union {
     struct {
-        /* IC đang ở sleep mode. */
-        uint16_t SLEEP_MODE : 1;
-        uint16_t BIT14_RESERVED : 1;
-        /* Đã nhận yêu cầu shutdown và đang chờ hoàn tất. */
-        uint16_t SHUTDOWN_PENDING : 1;
-        /* Có permanent fault. */
-        uint16_t PERMANENT_FAULT : 1;
-        /* Có safety fault. */
-        uint16_t SAFETY_FAULT : 1;
-        /* Mức hiện tại của chân fuse. */
-        uint16_t FUSE_PIN : 1;
-        /* Trạng thái bảo mật:
-         * 3 = sealed, 2 = unsealed, 1 = full access.
-         */
-        uint16_t SECURITY_STATE : 2;
-        /* OTP write bị chặn do điều kiện không hợp lệ. */
-        uint16_t WR_TO_OTP_BLOCKED : 1;
-        /* Đang có yêu cầu ghi OTP. */
-        uint16_t WR_TO_OTP_PENDING : 1;
-        /* Đang thực hiện kiểm tra open-wire. */
-        uint16_t OPEN_WIRE_CHECK : 1;
-        /* Watchdog từng reset hệ thống. */
-        uint16_t WD_WAS_TRIGGERED : 1;
-        /* Vừa xảy ra full reset. */
-        uint16_t FULL_RESET_OCCURED : 1;
-        /* Điều kiện sleep được phép. */
-        uint16_t SLEEP_EN_ALLOWED : 1;
-        /* Đang ở precharge/predischarge mode. */
-        uint16_t PRECHARGE_MODE : 1;
-        /* Đang ở config update mode để ghi data memory. */
-        uint16_t CONFIG_UPDATE_MODE : 1;
+        uint16_t SLEEP_MODE : 1;        /* IC đang ở sleep mode. */
+        uint16_t BIT14_RESERVED : 1;  
+        uint16_t SHUTDOWN_PENDING : 1;  /* Đã nhận yêu cầu shutdown và đang chờ hoàn tất. */
+        uint16_t PERMANENT_FAULT : 1;   /* Có permanent fault. */
+        uint16_t SAFETY_FAULT : 1;      /* Có safety fault. */
+        uint16_t FUSE_PIN : 1;          /* Mức hiện tại của chân fuse. */
+        uint16_t SECURITY_STATE : 2;    /* Trạng thái bảo mật: 3 = sealed, 2 = unsealed, 1 = full access. */
+        uint16_t WR_TO_OTP_BLOCKED : 1; /* OTP write bị chặn do điều kiện không hợp lệ. */
+        uint16_t WR_TO_OTP_PENDING : 1; /* Đang có yêu cầu ghi OTP. */
+        uint16_t OPEN_WIRE_CHECK : 1;   /* Đang thực hiện kiểm tra open-wire. */
+        uint16_t WD_WAS_TRIGGERED : 1;  /* Watchdog từng reset hệ thống. */
+        uint16_t FULL_RESET_OCCURED : 1;/* Vừa xảy ra full reset. */
+        uint16_t SLEEP_EN_ALLOWED : 1;  /* Điều kiện sleep được phép. */
+        uint16_t PRECHARGE_MODE : 1;    /* Đang ở precharge/predischarge mode. */
+        uint16_t CONFIG_UPDATE_MODE : 1;/* Đang ở config update mode để ghi data memory. */
     } bits;
 } bq76952_battery_status_t;
 
@@ -301,6 +440,25 @@ typedef struct {
     uint8_t ddsgPinConfig;
     uint8_t dfetoffPinConfig;
 } bq76952_otp_status_t;
+
+typedef struct
+{
+    /* data */
+    bq76952_battery_status_t    Bat_Status;
+    bq76952_AlamStatus_t        Alert_St;
+    BQ76952_SafetyAlertA_t      alertA;
+    BQ76952_SafetyStatusA_t     statusA;
+
+    BQ76952_SafetyAlertB_t      alertB;
+    BQ76952_SafetyStatusB_t     statusB;
+
+    BQ76952_SafetyAlertC_t      alertC;
+    BQ76952_SafetyStatusC_t     statusC;
+
+    BQ76952_FETStatus_t         FetStatus;
+
+}BQ76952_RawInfo_t;
+
 
 /* Khởi tạo driver/I2C và kiểm tra metadata cơ bản; BMS chịu trách nhiệm cấu hình runtime. */
 void bq76952_init(void);
