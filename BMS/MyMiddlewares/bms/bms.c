@@ -658,9 +658,9 @@ static void BMS_UpdateBqAlarmRawStatus(BMS_Tracking_t *tracking)
     }
 
     alarm_raw_status = (uint16_t)bq76952_getAlertRawStatusRegister();
-    tracking->bqAlarmRawStatus = alarm_raw_status;
-    tracking->bqChargeFetBlocked = (alarm_raw_status & BMS_BQ_ALARM_RAW_XCHG) != 0U;
-    tracking->bqDischargeFetBlocked = (alarm_raw_status & BMS_BQ_ALARM_RAW_XDSG) != 0U;
+    tracking->bqAlarmRawStatus.raw = alarm_raw_status;
+    tracking->bqChargeFetBlocked = tracking->bqAlarmRawStatus.bit.XCHG;
+    tracking->bqDischargeFetBlocked = tracking->bqAlarmRawStatus.bit.XDSG;
 }
 
 static void BMS_UpdateFaultFlags(BMS_Tracking_t *tracking, uint32_t now)
@@ -825,6 +825,7 @@ static void BMS_UpdateState(BMS_Tracking_t *tracking)
 
 static void BMS_ApplyFetPolicy(BMS_Tracking_t *tracking)
 {
+    static uint8_t state = 0;
     if (tracking == NULL) {
         return;
     }
@@ -835,6 +836,7 @@ static void BMS_ApplyFetPolicy(BMS_Tracking_t *tracking)
         HAL_Delay(BMS_FET_STATUS_SETTLE_MS);
         BMS_UpdateFetStatus(tracking);
         BMS_SyncStateWithFetAvailability(tracking);
+        state = 1;
         return;
     }
 
@@ -844,6 +846,7 @@ static void BMS_ApplyFetPolicy(BMS_Tracking_t *tracking)
         HAL_Delay(BMS_FET_STATUS_SETTLE_MS);
         BMS_UpdateFetStatus(tracking);
         BMS_SyncStateWithFetAvailability(tracking);
+        state = 1;
         return;
     }
 
@@ -853,14 +856,19 @@ static void BMS_ApplyFetPolicy(BMS_Tracking_t *tracking)
         HAL_Delay(BMS_FET_STATUS_SETTLE_MS);
         BMS_UpdateFetStatus(tracking);
         BMS_SyncStateWithFetAvailability(tracking);
+        state = 1;
         return;
     }
 
-    BMS_SetFetoff(false);
-    bq76952_setFET(ALL, ON);
-    HAL_Delay(BMS_FET_STATUS_SETTLE_MS);
-    BMS_UpdateFetStatus(tracking);
-    BMS_SyncStateWithFetAvailability(tracking);
+    if(state == 1)
+    {
+        BMS_SetFetoff(false);
+        bq76952_setFET(ALL, ON);
+        HAL_Delay(BMS_FET_STATUS_SETTLE_MS);
+        BMS_UpdateFetStatus(tracking);
+        BMS_SyncStateWithFetAvailability(tracking);
+    }
+    
 }
 
 static void BMS_SyncStateWithFetAvailability(BMS_Tracking_t *tracking)

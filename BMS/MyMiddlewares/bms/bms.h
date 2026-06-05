@@ -139,7 +139,7 @@ typedef struct {
     bool     fetsEnabled;
     bool     bqChargeFetBlocked;
     bool     bqDischargeFetBlocked;
-    uint16_t bqAlarmRawStatus;
+    bq76952_AlamStatus_t        bqAlarmRawStatus;
 
     BMS_FaultFlags_t faults;
     bool     chargeDisabled;

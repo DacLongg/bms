@@ -62,8 +62,8 @@ static void MainApp_LogBatteryInfo(const BMS_Tracking_t *tracking)
                  tracking->fetsEnabled ? 1U : 0U);
     BMS_LOG_INFO("Temp1 = %u : Temp2 = %u",
                  (int)tracking->temperature[0],
-                (int)tracking->temperature[1]);
-    BMS_LOG_INFO("bq alarmRaw=0x%04x xchg=%u xdsg=%u",
+                 (int)tracking->temperature[1]);
+    BMS_LOG_INFO("bq alarmRaw=0x%04x xchg=%u xdsg=%u, SSBC=%u, SSA=%u",
                  (unsigned int)tracking->bqAlarmRawStatus,
                  tracking->bqChargeFetBlocked ? 1U : 0U,
                  tracking->bqDischargeFetBlocked ? 1U : 0U);
