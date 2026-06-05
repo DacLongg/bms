@@ -248,7 +248,7 @@ void BMS_Error_Handler(void)
     g_bms_tracking.state = BMS_STATE_FAULT;
     g_bms_tracking.bqChargeFetBlocked = false;
     g_bms_tracking.bqDischargeFetBlocked = false;
-    g_bms_tracking.bqAlarmRawStatus = 0U;
+    g_bms_tracking.bqAlarmRawStatus.raw = 0U;
     g_bms_tracking.balanceMask = 0U;
     g_bms_tracking.balanceRequired = false;
     g_bms_tracking.fetOffAsserted = true;
@@ -308,7 +308,7 @@ static void BMS_ResetTracking(void)
     g_bms_tracking.fetsEnabled          = false;
     g_bms_tracking.bqChargeFetBlocked   = false;
     g_bms_tracking.bqDischargeFetBlocked    = false;
-    g_bms_tracking.bqAlarmRawStatus         = 0U;
+    g_bms_tracking.bqAlarmRawStatus.raw         = 0U;
     g_bms_tracking.faults                   = (BMS_FaultFlags_t){0};
     g_bms_tracking.chargeDisabled           = true;
     g_bms_tracking.dischargeDisabled        = true;
@@ -785,6 +785,10 @@ static void BMS_MergeBQFaultFlags(BMS_Tracking_t *tracking)
                                         temperature_status.bits.UNDERTEMP_CHG ||
                                         temperature_status.bits.UNDERTEMP_DCHG;
     tracking->faults.bqSafetyFault = tracking->faults.shortCircuit;
+    if(tracking->faults.chargeOverCurrent > 0)
+    {
+        BMS_LOG_INFO("protection : OCC");
+    }
 }
 
 static void BMS_UpdateState(BMS_Tracking_t *tracking)
@@ -882,7 +886,7 @@ static void BMS_SyncStateWithFetAvailability(BMS_Tracking_t *tracking)
     }
 
     alarm_raw_status = (uint16_t)bq76952_getAlertRawStatusRegister();
-    tracking->bqAlarmRawStatus = alarm_raw_status;
+    tracking->bqAlarmRawStatus.raw = alarm_raw_status;
     tracking->bqChargeFetBlocked = (alarm_raw_status & BMS_BQ_ALARM_RAW_XCHG) != 0U;
     tracking->bqDischargeFetBlocked = (alarm_raw_status & BMS_BQ_ALARM_RAW_XDSG) != 0U;
 

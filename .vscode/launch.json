@@ -17,6 +17,21 @@
       "device": "STM32L010C6Tx",
       "runToEntryPoint": "main",
       "preLaunchTask": "Rebuild BMS",
+      "loadFiles": [
+        "${workspaceFolder}/BMS/build/BMS.elf"
+      ],
+      "overrideResetCommands": [
+        "file ${workspaceFolder}/BMS/build/BMS.elf",
+        "monitor reset halt",
+        "load",
+        "monitor reset halt"
+      ],
+      "overrideRestartCommands": [
+        "file ${workspaceFolder}/BMS/build/BMS.elf",
+        "monitor reset halt",
+        "load",
+        "monitor reset halt"
+      ],
       "windows": {
         "gdbPath": "C:/ProgramData/chocolatey/bin/arm-none-eabi-gdb.exe",
         "objdumpPath": "C:/ProgramData/chocolatey/bin/arm-none-eabi-objdump.exe",

@@ -64,9 +64,11 @@ static void MainApp_LogBatteryInfo(const BMS_Tracking_t *tracking)
                  (int)tracking->temperature[0],
                  (int)tracking->temperature[1]);
     BMS_LOG_INFO("bq alarmRaw=0x%04x xchg=%u xdsg=%u, SSBC=%u, SSA=%u",
-                 (unsigned int)tracking->bqAlarmRawStatus,
+                 (unsigned int)tracking->bqAlarmRawStatus.raw,
                  tracking->bqChargeFetBlocked ? 1U : 0U,
-                 tracking->bqDischargeFetBlocked ? 1U : 0U);
+                 tracking->bqDischargeFetBlocked ? 1U : 0U,
+                (uint8_t)tracking->bqAlarmRawStatus.bit.SSBC,
+                (uint8_t)tracking->bqAlarmRawStatus.bit.SSA);
     BMS_LOG_INFO("cell min = %u : avg = %u : max = %u : delta = %u : bal = 0x%03x",
                  tracking->cellVoltages.minCellVoltage,
                  tracking->cellVoltages.averageCellVoltage,

@@ -10,7 +10,7 @@
 
 #define BMS_UART_RESPONSE_FLAG                 0x80U
 #define BMS_UART_TX_TIMEOUT_MS                 50U
-#define BMS_UART_RX_BUFFER_SIZE                128U
+#define BMS_UART_RX_BUFFER_SIZE                192U
 #define BMS_UART_TX_BUFFER_SIZE                (BMS_UART_MAX_PAYLOAD_SIZE + 6U)
 #define BMS_UART_OTP_WRITE_MAGIC0              0x4FU
 #define BMS_UART_OTP_WRITE_MAGIC1              0x54U

@@ -1492,7 +1492,7 @@ bool bq76952_setDSGFETProtectionsC(void)
 bool bq76952_setFET_Options(void)
 {
     /* 0x1D cấu hình hành vi FET/precharge/predischarge theo thiết kế board hiện tại. */
-    return bq76952_writeDataMemory(FET_OPTIONS, 0x1D, 1U);
+    return bq76952_writeDataMemory(FET_OPTIONS, 0x1F, 1U);
 }
 
 bool bq76952_setFET_PredischargeTimeout(void)
