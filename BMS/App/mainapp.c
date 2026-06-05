@@ -42,6 +42,11 @@ static void MainApp_LogBatteryInfo(const BMS_Tracking_t *tracking)
     if (tracking == NULL) {
         return;
     }
+    if(tracking->cellVoltages.IndexAccumulated[0] > 0)
+    {
+        return;
+    }
+
 
     BMS_LOG_INFO("bat c=%lu st=%s pack=%u adcPack=%u cur=%ld dir=%u chgNow=%u dchNow=%u chgFet=%u dchFet=%u fetEn=%u",
                  (unsigned long)tracking->circle_counter,
@@ -63,22 +68,22 @@ static void MainApp_LogBatteryInfo(const BMS_Tracking_t *tracking)
                  tracking->bqChargeFetBlocked ? 1U : 0U,
                  tracking->bqDischargeFetBlocked ? 1U : 0U);
     BMS_LOG_INFO("cell min = %u : avg = %u : max = %u : delta = %u : bal = 0x%03x",
-                 tracking->minCellVoltage,
-                 tracking->averageCellVoltage,
-                 tracking->maxCellVoltage,
-                 tracking->deltaCellVoltage,
+                 tracking->cellVoltages.minCellVoltage,
+                 tracking->cellVoltages.averageCellVoltage,
+                 tracking->cellVoltages.maxCellVoltage,
+                 tracking->cellVoltages.deltaCellVoltage,
                  tracking->balanceMask);
     BMS_LOG_INFO("cell %u %u %u %u %u %u %u %u %u %u",
-                 tracking->cellVoltages[0],
-                 tracking->cellVoltages[1],
-                 tracking->cellVoltages[2],
-                 tracking->cellVoltages[3],
-                 tracking->cellVoltages[4],
-                 tracking->cellVoltages[5],
-                 tracking->cellVoltages[6],
-                 tracking->cellVoltages[7],
-                 tracking->cellVoltages[8],
-                 tracking->cellVoltages[9]);
+                 tracking->cellVoltages.cellNum[0],
+                 tracking->cellVoltages.cellNum[1],
+                 tracking->cellVoltages.cellNum[2],
+                 tracking->cellVoltages.cellNum[3],
+                 tracking->cellVoltages.cellNum[4],
+                 tracking->cellVoltages.cellNum[5],
+                 tracking->cellVoltages.cellNum[6],
+                 tracking->cellVoltages.cellNum[7],
+                 tracking->cellVoltages.cellNum[8],
+                 tracking->cellVoltages.cellNum[9]);
 }
 #else
 static void MainApp_LogBatteryInfo(const BMS_Tracking_t *tracking)
@@ -170,7 +175,7 @@ void mainapp(void)
         initialized = true;
         BMS_LOG_INFO("mainapp init sleepX=%lu min wakeY=%lu s",
                      (unsigned long)MAINAPP_IDLE_BEFORE_SLEEP_MINUTES,
-                     (unsigned long)MAINAPP_SLEEP_WAKEUP_SECONDS);
+                     (unsigned long)MAINAPP_SLEEP_WAKEUP_HOURS);
         // BMS_Set_5V_Output(false);
     }
 

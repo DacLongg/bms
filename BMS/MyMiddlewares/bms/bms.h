@@ -9,10 +9,13 @@
 #define BMS_NUMBER_OF_CELLS                         10U
 #define BMS_NUMBER_OF_THERMISTORS                   2U
 
-#define BMS_CELL_OV_CUTOFF_MV                       4180U
+#define BMS_CELL_TIMES_ACUMMULATE                   10
+#define BMS_CELL_OV_CUTOFF_MV_BQ                    4200U
+#define BMS_CELL_OV_CUTOFF_MV_DEV                   4150U
 #define BMS_CELL_OV_RECOVER_MV                      4100U
-#define BMS_CELL_UV_CUTOFF_MV                       3500U
-#define BMS_CELL_UV_RECOVER_MV                      3600U
+#define BMS_CELL_UV_CUTOFF_MV_BQ                    3500U
+#define BMS_CELL_UV_CUTOFF_MV_DEV                   3550U
+#define BMS_CELL_UV_RECOVER_MV                      3650U
 
 #define BMS_BALANCE_DELTA_MV                        30U
 #define BMS_BALANCE_DELTA_MV_RECOVERY               20U
@@ -97,17 +100,31 @@ typedef struct {
     bool communicationFault;
 } BMS_FaultFlags_t;
 
+typedef struct // 58B
+{
+    /* data */
+    uint8_t  IndexAccumulated[BMS_NUMBER_OF_CELLS];     // 10B
+    uint16_t RealTimeAccumulated[BMS_NUMBER_OF_CELLS];  // 20B
+    uint16_t cellNum[BMS_NUMBER_OF_CELLS];         // 20B
+    uint16_t minCellVoltage;
+    uint16_t maxCellVoltage;
+    uint16_t averageCellVoltage;
+    uint16_t deltaCellVoltage;
+}cellVoltages_t;
+
+
 typedef struct {
     bool                    initialized;
     bool                    connected;
     BMS_State_t             state;
     BMS_CurrentDirection_t  currentDirection;
+    cellVoltages_t          cellVoltages;
 
-    uint16_t cellVoltages[BMS_NUMBER_OF_CELLS];
-    uint16_t minCellVoltage;
-    uint16_t maxCellVoltage;
-    uint16_t averageCellVoltage;
-    uint16_t deltaCellVoltage;
+    // uint16_t cellVoltages[BMS_NUMBER_OF_CELLS];
+    // uint16_t minCellVoltage;
+    // uint16_t maxCellVoltage;
+    // uint16_t averageCellVoltage;
+    // uint16_t deltaCellVoltage;
     uint16_t stackVoltage;
     uint16_t packVoltage;
     uint16_t circle_counter;

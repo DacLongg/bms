@@ -59,7 +59,7 @@ static uint32_t g_discharge_oc_recovery_tick;
 static void BMS_ResetTracking(void);
 static void BMS_ConfigureMonitor(void);
 static void BMS_ConfigureHardwarePins(void);
-static void BMS_ReadMeasurements(BMS_Tracking_t *tracking);
+static void BMS_ReadMeasurements(BMS_Tracking_t *tracking, uint32_t Now);
 static void BMS_HandleHardwareSignals(BMS_Tracking_t *tracking, uint32_t now);
 static void BMS_UpdateBatteryAdc(BMS_Tracking_t *tracking, uint32_t now);
 static void BMS_SetFetoff(bool asserted);
@@ -134,7 +134,7 @@ void BMS_Update(void)
         return;
     }
 
-    BMS_ReadMeasurements(&g_bms_tracking);
+    BMS_ReadMeasurements(&g_bms_tracking, now);
     BMS_HandleHardwareSignals(&g_bms_tracking, now);
     BMS_UpdateBatteryAdc(&g_bms_tracking, now);
     BMS_UpdateCellStatistics(&g_bms_tracking); // Cập nhật min/max/average/delta cell voltage và stack voltage
@@ -253,6 +253,7 @@ void BMS_Error_Handler(void)
     g_bms_tracking.balanceRequired = false;
     g_bms_tracking.fetOffAsserted = true;
     g_bms_tracking.batSenseEnabled = false;
+    bq76952_setCellBalanceMask(0U);
     bq76952_setFET(ALL, OFF);
     BMS_SetFetoff(true);
     BMS_SetBatSenseEnable(false);
@@ -279,7 +280,9 @@ static void BMS_ResetTracking(void)
 {
     /* Reset all cell voltages */
     for (uint8_t i = 0U; i < BMS_NUMBER_OF_CELLS; ++i) {
-        g_bms_tracking.cellVoltages[i] = 0U;
+        g_bms_tracking.cellVoltages.cellNum[i] = 0U;
+        g_bms_tracking.cellVoltages.RealTimeAccumulated[i] = 0;
+        g_bms_tracking.cellVoltages.IndexAccumulated[i] = 0;
     }
 
     for (uint8_t i = 0U; i < BMS_NUMBER_OF_THERMISTORS; ++i) {
@@ -293,10 +296,10 @@ static void BMS_ResetTracking(void)
     g_bms_tracking.circle_counter       = 0U;
     g_bms_tracking.stackVoltage         = 0U;
     g_bms_tracking.packVoltage          = 0U;
-    g_bms_tracking.minCellVoltage       = 0U;
-    g_bms_tracking.maxCellVoltage       = 0U;
-    g_bms_tracking.averageCellVoltage   = 0U;
-    g_bms_tracking.deltaCellVoltage     = 0U;
+    g_bms_tracking.cellVoltages.minCellVoltage       = 0U;
+    g_bms_tracking.cellVoltages.maxCellVoltage       = 0U;
+    g_bms_tracking.cellVoltages.averageCellVoltage   = 0U;
+    g_bms_tracking.cellVoltages.deltaCellVoltage     = 0U;
     g_bms_tracking.current_mA           = 0;
     g_bms_tracking.charging             = false;
     g_bms_tracking.discharging          = false;
@@ -364,9 +367,9 @@ static void BMS_ConfigureMonitor(void)
     BMS_BQ_CONFIG_STEP(config_ok, bq76952_setSF_AlertMask_A());
     BMS_BQ_CONFIG_STEP(config_ok, bq76952_setSF_AlertMask_B());
     BMS_BQ_CONFIG_STEP(config_ok, bq76952_setSF_AlertMask_C());
-    BMS_BQ_CONFIG_STEP(config_ok, bq76952_setCellOvervoltageProtection(BMS_CELL_OV_CUTOFF_MV,
+    BMS_BQ_CONFIG_STEP(config_ok, bq76952_setCellOvervoltageProtection(BMS_CELL_OV_CUTOFF_MV_BQ,
                                                                        BMS_BQ_PROTECTION_DELAY_MS));
-    BMS_BQ_CONFIG_STEP(config_ok, bq76952_setCellUndervoltageProtection(BMS_CELL_UV_CUTOFF_MV,
+    BMS_BQ_CONFIG_STEP(config_ok, bq76952_setCellUndervoltageProtection(BMS_CELL_UV_CUTOFF_MV_BQ,
                                                                         BMS_BQ_PROTECTION_DELAY_MS));
     BMS_BQ_CONFIG_STEP(config_ok, bq76952_setChargingTemperatureMaxLimit(
                                       BMS_CHARGE_OT_CUTOFF_C,
@@ -382,15 +385,16 @@ static void BMS_ConfigureMonitor(void)
                                       BMS_UNDERTEMP_CUTOFF_C,
                                       BMS_UNDERTEMP_RECOVER_C,
                                       BMS_BQ_TEMPERATURE_PROTECTION_DELAY_SEC));
-    BMS_BQ_CONFIG_STEP(config_ok, bq76952_configureAutonomousCellBalancing(
-                                      BMS_BALANCE_MIN_CELL_MV,
-                                      BMS_BALANCE_DELTA_MV,
-                                      BMS_BALANCE_DELTA_MV_RECOVERY,
-                                      BMS_BALANCE_MIN_TEMP_C,
-                                      BMS_BALANCE_MAX_TEMP_C,
-                                      BMS_BALANCE_MAX_INTERNAL_TEMP_C,
-                                      BMS_BALANCE_INTERVAL_SEC,
-                                      BMS_BALANCE_MAX_ACTIVE_CELLS));
+    BMS_BQ_CONFIG_STEP(config_ok, bq76952_setCellBalancingEnabled(true));
+    // BMS_BQ_CONFIG_STEP(config_ok, bq76952_configureAutonomousCellBalancing(
+    //                                   BMS_BALANCE_MIN_CELL_MV,
+    //                                   BMS_BALANCE_DELTA_MV,
+    //                                   BMS_BALANCE_DELTA_MV_RECOVERY,
+    //                                   BMS_BALANCE_MIN_TEMP_C,
+    //                                   BMS_BALANCE_MAX_TEMP_C,
+    //                                   BMS_BALANCE_MAX_INTERNAL_TEMP_C,
+    //                                   BMS_BALANCE_INTERVAL_SEC,
+    //                                   BMS_BALANCE_MAX_ACTIVE_CELLS));
 
     over_current_sense_mV = (((uint32_t)BMS_OVER_CURRENT_DISCHARGE * BMS_BQ_SENSE_RESISTOR_UOHM) + 500000UL) / 1000000UL;
     over_current_chargr_mV = (((uint32_t)BMS_OVER_CURRENT_CHARGE * BMS_BQ_SENSE_RESISTOR_UOHM) + 500000UL) / 1000000UL;
@@ -537,16 +541,28 @@ static void BMS_UpdateBatteryAdc(BMS_Tracking_t *tracking, uint32_t now)
     tracking->batAdcEstimatedPack_mV = (uint16_t)pack_mv;
 }
 
-static void BMS_ReadMeasurements(BMS_Tracking_t *tracking)
+static void BMS_ReadMeasurements(BMS_Tracking_t *tracking, uint32_t Now)
 {
-    // int raw_cell_voltage[BMS_NUMBER_OF_CELLS];
+    uint16_t raw_cell_voltage[BMS_NUMBER_OF_CELLS];
     bq76952_battery_status_t batt_status;
 
     if (tracking == NULL) {
         return;
     }
 
-    bq76952_getOnlyConnectedCellVoltages(tracking->cellVoltages);
+    bq76952_getOnlyConnectedCellVoltages(raw_cell_voltage);
+    for(uint8_t count = 0; count < BMS_NUMBER_OF_CELLS; count ++)
+    {
+        tracking->cellVoltages.RealTimeAccumulated[count] += raw_cell_voltage[count];
+        if(++ tracking->cellVoltages.IndexAccumulated[count] >= BMS_CELL_TIMES_ACUMMULATE)
+        {
+            tracking->cellVoltages.cellNum[count] = tracking->cellVoltages.RealTimeAccumulated[count] / BMS_CELL_TIMES_ACUMMULATE;
+            tracking->cellVoltages.RealTimeAccumulated[count] = 0;
+            tracking->cellVoltages.IndexAccumulated[count] = 0;
+        }
+    }
+    
+
 
 
     tracking->stackVoltage = 0U;
@@ -570,7 +586,11 @@ static void BMS_UpdateCellStatistics(BMS_Tracking_t *tracking)
     }
 
     for (uint8_t i = 0U; i < BMS_NUMBER_OF_CELLS; ++i) {
-        uint16_t voltage = tracking->cellVoltages[i];
+        uint16_t voltage = tracking->cellVoltages.cellNum[i];
+        if(voltage == 0)
+        {
+            return;
+        }
 
         voltage_sum += voltage;
         if ((voltage > 0U) && (voltage < min_voltage)) {
@@ -581,10 +601,10 @@ static void BMS_UpdateCellStatistics(BMS_Tracking_t *tracking)
         }
     }
 
-    tracking->minCellVoltage = (min_voltage == UINT16_MAX) ? 0U : min_voltage;
-    tracking->maxCellVoltage = max_voltage;
-    tracking->averageCellVoltage = (uint16_t)(voltage_sum / BMS_NUMBER_OF_CELLS);
-    tracking->deltaCellVoltage = tracking->maxCellVoltage - tracking->minCellVoltage;
+    tracking->cellVoltages.minCellVoltage = (min_voltage == UINT16_MAX) ? 0U : min_voltage;
+    tracking->cellVoltages.maxCellVoltage = max_voltage;
+    tracking->cellVoltages.averageCellVoltage = (uint16_t)(voltage_sum / BMS_NUMBER_OF_CELLS);
+    tracking->cellVoltages.deltaCellVoltage = tracking->cellVoltages.maxCellVoltage - tracking->cellVoltages.minCellVoltage;
     tracking->packVoltage = (voltage_sum > UINT16_MAX) ? UINT16_MAX : (uint16_t)voltage_sum;
 }
 
@@ -651,14 +671,11 @@ static void BMS_UpdateFaultFlags(BMS_Tracking_t *tracking, uint32_t now)
         return;
     }
 
-    for (uint8_t i = 0U; i < BMS_NUMBER_OF_CELLS; ++i) {
-        if (tracking->cellVoltages[i] >= BMS_CELL_OV_CUTOFF_MV) {
-            tracking->faults.cellOverVoltage = true;
-        }
-        if ((tracking->cellVoltages[i] > 0U) &&
-            (tracking->cellVoltages[i] <= BMS_CELL_UV_CUTOFF_MV)) {
-            tracking->faults.cellUnderVoltage = true;
-        }
+    if (tracking->cellVoltages.averageCellVoltage >= BMS_CELL_OV_CUTOFF_MV_DEV) {
+        tracking->faults.cellOverVoltage = true;
+    }
+    if (tracking->cellVoltages.averageCellVoltage <= BMS_CELL_UV_CUTOFF_MV_DEV) {
+        tracking->faults.cellUnderVoltage = true;
     }
 
     if (tracking->faults.cellOverVoltage &&
@@ -717,12 +734,9 @@ static void BMS_UpdateFaultFlags(BMS_Tracking_t *tracking, uint32_t now)
                 g_charge_oc_recovery_pending = true;
                 g_charge_oc_recovery_tick = now;
             } else if ((now - g_charge_oc_recovery_tick) >= BMS_OVER_CURRENT_RECOVERY_DELAY_MS) {
-                BMS_UpdateBqAlarmRawStatus(tracking);
-                if (!tracking->bqChargeFetBlocked) {
-                    tracking->faults.chargeOverCurrent = false;
-                    g_charge_oc_recovery_pending = false;
-                }
-            }
+                tracking->faults.chargeOverCurrent = false;
+                g_charge_oc_recovery_pending = false;
+        }
         } else {
             g_charge_oc_recovery_pending = false;
         }
@@ -732,11 +746,8 @@ static void BMS_UpdateFaultFlags(BMS_Tracking_t *tracking, uint32_t now)
                 g_discharge_oc_recovery_pending = true;
                 g_discharge_oc_recovery_tick = now;
             } else if ((now - g_discharge_oc_recovery_tick) >= BMS_OVER_CURRENT_RECOVERY_DELAY_MS) {
-                BMS_UpdateBqAlarmRawStatus(tracking);
-                if (!tracking->bqDischargeFetBlocked) {
-                    tracking->faults.dischargeOverCurrent = false;
-                    g_discharge_oc_recovery_pending = false;
-                }
+                tracking->faults.dischargeOverCurrent = false;
+                g_discharge_oc_recovery_pending = false;
             }
         } else {
             g_discharge_oc_recovery_pending = false;
@@ -854,7 +865,40 @@ static void BMS_ApplyFetPolicy(BMS_Tracking_t *tracking)
 
 static void BMS_SyncStateWithFetAvailability(BMS_Tracking_t *tracking)
 {
-    BMS_UpdateBqAlarmRawStatus(tracking);
+    uint16_t alarm_raw_status;
+    bool charge_blocked;
+    bool discharge_blocked;
+
+    if (tracking == NULL) {
+        return;
+    }
+
+    alarm_raw_status = (uint16_t)bq76952_getAlertRawStatusRegister();
+    tracking->bqAlarmRawStatus = alarm_raw_status;
+    tracking->bqChargeFetBlocked = (alarm_raw_status & BMS_BQ_ALARM_RAW_XCHG) != 0U;
+    tracking->bqDischargeFetBlocked = (alarm_raw_status & BMS_BQ_ALARM_RAW_XDSG) != 0U;
+
+    if (tracking->state != BMS_STATE_NORMAL) {
+        return;
+    }
+
+    charge_blocked = tracking->bqChargeFetBlocked || !tracking->chargeFetEnabled;
+    discharge_blocked = tracking->bqDischargeFetBlocked || !tracking->dischargeFetEnabled;
+
+    if (!charge_blocked && !discharge_blocked) {
+        return;
+    }
+
+    tracking->chargeDisabled = charge_blocked;
+    tracking->dischargeDisabled = discharge_blocked;
+
+    if (charge_blocked && discharge_blocked) {
+        tracking->state = BMS_STATE_FAULT;
+    } else if (charge_blocked) {
+        tracking->state = BMS_STATE_CHARGE_PROTECT;
+    } else {
+        tracking->state = BMS_STATE_DISCHARGE_PROTECT;
+    }
 }
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
@@ -900,10 +944,33 @@ static void BMS_UpdateCoulombCounter(BMS_Tracking_t *tracking, uint32_t dt_ms)
 
 static void BMS_UpdateBalancing(BMS_Tracking_t *tracking, uint32_t now)
 {
-    static uint32_t g_last_balance_tick = 0U;
-    uint16_t active_mask;
+    uint16_t requested_mask = 0U;
+    bool previous_selected = false;
+    static uint32_t g_last_balance_tick = 0;
+    bool balance_allowed;
 
     if (tracking == NULL) {
+        return;
+    }
+
+    if (tracking->balanceRequired) {
+        if (tracking->cellVoltages.deltaCellVoltage < BMS_BALANCE_DELTA_MV_RECOVERY) {
+            tracking->balanceRequired = false;
+        }
+    } else if (tracking->cellVoltages.deltaCellVoltage >= BMS_BALANCE_DELTA_MV) {
+        tracking->balanceRequired = true;
+    }
+
+    balance_allowed = (tracking->state == BMS_STATE_NORMAL) &&
+                      tracking->balanceRequired &&
+                      (tracking->currentDirection != BMS_CURRENT_DISCHARGE);
+    if (!balance_allowed) {
+        if ((tracking->balanceMask != 0U) || (g_last_logged_balance_mask != 0U)) {
+            bq76952_setCellBalanceMask(0U);
+            BMS_LOG_INFO("balance off");
+            g_last_logged_balance_mask = 0U;
+        }
+        tracking->balanceMask = 0U;
         return;
     }
 
@@ -912,14 +979,37 @@ static void BMS_UpdateBalancing(BMS_Tracking_t *tracking, uint32_t now)
     }
     g_last_balance_tick = now;
 
-    active_mask = (uint16_t)(bq76952_getCellBalanceActiveMask() &
-                             (uint16_t)((1UL << BMS_NUMBER_OF_CELLS) - 1UL));
+    for (uint8_t i = 0U; i < BMS_NUMBER_OF_CELLS; ++i) {
+        bool select_cell = false;
 
-    tracking->balanceMask = active_mask;
-    tracking->balanceRequired = (active_mask != 0U);
-    if (active_mask != g_last_logged_balance_mask) {
-        BMS_LOG_INFO("balance active=0x%04x delta=%u", active_mask, tracking->deltaCellVoltage);
-        g_last_logged_balance_mask = active_mask;
+        if (tracking->cellVoltages.cellNum[i] < BMS_BALANCE_MIN_CELL_MV) {
+            previous_selected = false;
+            continue;
+        }
+
+        if ((tracking->cellVoltages.cellNum[i] + BMS_BALANCE_DELTA_MV_RECOVERY) <= tracking->cellVoltages.maxCellVoltage &&
+            tracking->cellVoltages.cellNum[i] < tracking->cellVoltages.maxCellVoltage) {
+            previous_selected = false;
+            continue;
+        }
+
+        if (tracking->cellVoltages.cellNum[i] >= (uint16_t)(tracking->cellVoltages.minCellVoltage + BMS_BALANCE_DELTA_MV_RECOVERY)) {
+            select_cell = true;
+        }
+
+        if (select_cell && !previous_selected) {
+            requested_mask |= (uint16_t)(1U << i);
+            previous_selected = true;
+        } else {
+            previous_selected = false;
+        }
+    }
+
+    tracking->balanceMask = requested_mask;
+    bq76952_setCellBalanceMask(requested_mask);
+    if (requested_mask != g_last_logged_balance_mask) {
+        BMS_LOG_INFO("balance mask=0x%04x delta=%u", requested_mask, tracking->cellVoltages.deltaCellVoltage);
+        g_last_logged_balance_mask = requested_mask;
     }
 }
 
@@ -1064,7 +1154,7 @@ const char *BMS_StateName(BMS_State_t state)
 static bool BMS_AllCellsAtOrBelow(const BMS_Tracking_t *tracking, uint16_t threshold_mV)
 {
     for (uint8_t i = 0U; i < BMS_NUMBER_OF_CELLS; ++i) {
-        if (tracking->cellVoltages[i] > threshold_mV) {
+        if (tracking->cellVoltages.cellNum[i] > threshold_mV) {
             return false;
         }
     }
@@ -1074,7 +1164,7 @@ static bool BMS_AllCellsAtOrBelow(const BMS_Tracking_t *tracking, uint16_t thres
 static bool BMS_AllCellsAtOrAbove(const BMS_Tracking_t *tracking, uint16_t threshold_mV)
 {
     for (uint8_t i = 0U; i < BMS_NUMBER_OF_CELLS; ++i) {
-        if ((tracking->cellVoltages[i] > 0U) && (tracking->cellVoltages[i] < threshold_mV)) {
+        if ((tracking->cellVoltages.cellNum[i] > 0U) && (tracking->cellVoltages.cellNum[i] < threshold_mV)) {
             return false;
         }
     }

@@ -178,6 +178,29 @@ typedef union {
     } bits;
 } bq76952_protection_t;
 
+typedef union {
+    uint16_t raw;
+    struct
+    {
+        uint16_t WAKE          : 1;  // Bit 0
+        uint16_t ADSCAN        : 1;  // Bit 1
+        uint16_t CB            : 1;  // Bit 2
+        uint16_t FUSE          : 1;  // Bit 3
+        uint16_t SHUTV         : 1;  // Bit 4
+        uint16_t XDSG          : 1;  // Bit 5
+        uint16_t XCHG          : 1;  // Bit 6
+        uint16_t RESERVED7     : 1;  // Bit 7 FULLSCAN
+        uint16_t INITCOMP      : 1;  // Bit 8
+        uint16_t INITSTART     : 1;  // Bit 9
+        uint16_t MSK_PFALERT   : 1;  // Bit 10
+        uint16_t MSK_SFALERT   : 1;  // Bit 11
+        uint16_t PF            : 1;  // Bit 12
+        uint16_t SSA           : 1;  // Bit 13
+        uint16_t SSBC          : 1;  // Bit 14
+        uint16_t RESERVED15    : 1;  // Bit 15
+    } bit;
+} bq76952_AlamStatus_t;
+
 /* Các cờ cảnh báo thuộc Safety Alert C. Đây là cảnh báo/latched alert,
  * hữu ích để biết lý do lỗi đã từng xuất hiện ngay cả khi trạng thái tức thời đã mất.
  */

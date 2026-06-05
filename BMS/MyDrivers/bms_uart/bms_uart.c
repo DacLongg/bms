@@ -430,7 +430,7 @@ static void bms_uart_handle_read_cells(uint8_t command, uint8_t length)
 
     (void)bms_uart_put_u8(payload, &payload_len, BMS_NUMBER_OF_CELLS);
     for (uint8_t i = 0U; i < BMS_NUMBER_OF_CELLS; ++i) {
-        (void)bms_uart_put_u16(payload, &payload_len, tracking->cellVoltages[i]);
+        (void)bms_uart_put_u16(payload, &payload_len, tracking->cellVoltages.cellNum[i]);
     }
 
     bms_uart_send_response(command, BMS_UART_STATUS_OK, payload, payload_len);
@@ -473,9 +473,9 @@ static void bms_uart_handle_read_limits(uint8_t command, uint8_t length)
 
     (void)bms_uart_put_u8(payload, &payload_len, BMS_NUMBER_OF_CELLS);
     (void)bms_uart_put_u8(payload, &payload_len, BMS_NUMBER_OF_THERMISTORS);
-    (void)bms_uart_put_u16(payload, &payload_len, BMS_CELL_OV_CUTOFF_MV);
+    (void)bms_uart_put_u16(payload, &payload_len, BMS_CELL_OV_CUTOFF_MV_DEV);
     (void)bms_uart_put_u16(payload, &payload_len, BMS_CELL_OV_RECOVER_MV);
-    (void)bms_uart_put_u16(payload, &payload_len, BMS_CELL_UV_CUTOFF_MV);
+    (void)bms_uart_put_u16(payload, &payload_len, BMS_CELL_UV_CUTOFF_MV_DEV);
     (void)bms_uart_put_u16(payload, &payload_len, BMS_CELL_UV_RECOVER_MV);
     (void)bms_uart_put_u16(payload, &payload_len, BMS_BALANCE_DELTA_MV);
     (void)bms_uart_put_u16(payload, &payload_len, BMS_BALANCE_MIN_CELL_MV);
