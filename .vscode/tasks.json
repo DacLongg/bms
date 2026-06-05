@@ -46,6 +46,15 @@
       ]
     },
     {
+      "label": "Debug Prep BMS",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "Stop Debug Servers",
+        "Build BMS"
+      ],
+      "problemMatcher": []
+    },
+    {
       "label": "Rebuild BMS",
       "dependsOrder": "sequence",
       "dependsOn": [
@@ -85,6 +94,31 @@
         "args": [
           "flash"
         ]
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Stop Debug Servers",
+      "type": "process",
+      "command": "pkill",
+      "args": [
+        "-f",
+        "openocd|arm-none-eabi-gdb|gdb-multiarch"
+      ],
+      "windows": {
+        "command": "powershell.exe",
+        "args": [
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-Command",
+          "$names = @('openocd', 'arm-none-eabi-gdb', 'gdb', 'gdb-multiarch'); foreach ($name in $names) { Get-Process -Name $name -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }; exit 0"
+        ]
+      },
+      "presentation": {
+        "reveal": "never",
+        "panel": "shared",
+        "clear": false
       },
       "problemMatcher": []
     }

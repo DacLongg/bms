@@ -9,11 +9,11 @@ extern UART_HandleTypeDef huart2;
 extern LPTIM_HandleTypeDef hlptim1;
 
 #define MAINAPP_BMS_UPDATE_MS 100U
-#define MAINAPP_IDLE_BEFORE_SLEEP_MINUTES 5U
+#define MAINAPP_IDLE_BEFORE_SLEEP_MINUTES 1U
 #define MAINAPP_SLEEP_WAKEUP_HOURS 2U
 #define MAINAPP_ALERT_WAKE_CLEAR_TRIES 3U
 #define MAINAPP_ALERT_WAKE_SETTLE_MS 2U
-#define MAINAPP_ALERT_IDLE_LEVEL GPIO_PIN_SET
+#define MAINAPP_ALERT_IDLE_LEVEL GPIO_PIN_RESET
 
 #define MAINAPP_IDLE_BEFORE_SLEEP_MS ((uint32_t)(MAINAPP_IDLE_BEFORE_SLEEP_MINUTES) * 60UL * 1000UL)
 #define MAINAPP_SLEEP_WAKEUP_MS ((uint32_t)(MAINAPP_SLEEP_WAKEUP_HOURS) * 60UL * 60UL * 1000UL)
@@ -63,12 +63,13 @@ static void MainApp_LogBatteryInfo(const BMS_Tracking_t *tracking)
     BMS_LOG_INFO("Temp1 = %u : Temp2 = %u",
                  (int)tracking->temperature[0],
                  (int)tracking->temperature[1]);
-    BMS_LOG_INFO("bq alarmRaw=0x%04x xchg=%u xdsg=%u, SSBC=%u, SSA=%u",
+    BMS_LOG_INFO("bq alarmRaw=0x%04x xchg=%u xdsg=%u, SSBC=%u, SSA=%u, CB=%u",
                  (unsigned int)tracking->bqAlarmRawStatus.raw,
                  tracking->bqChargeFetBlocked ? 1U : 0U,
                  tracking->bqDischargeFetBlocked ? 1U : 0U,
                 (uint8_t)tracking->bqAlarmRawStatus.bit.SSBC,
-                (uint8_t)tracking->bqAlarmRawStatus.bit.SSA);
+                (uint8_t)tracking->bqAlarmRawStatus.bit.SSA,
+                (uint8_t)tracking->bqAlarmRawStatus.bit.CB);
     BMS_LOG_INFO("cell min = %u : avg = %u : max = %u : delta = %u : bal = 0x%03x",
                  tracking->cellVoltages.minCellVoltage,
                  tracking->cellVoltages.averageCellVoltage,
@@ -206,14 +207,14 @@ void mainapp(void)
             BMS_LOG_INFO("sleep enter bq_sleep=%u idle_ms=%lu",
                          tracking->bqSleepMode ? 1U : 0U,
                          (unsigned long)(now - last_activity_tick));
+            HAL_Delay(1000);
             alert_ready = MainApp_PrepareAlertWakeLine();
             if (alert_ready) {
                 bq_sleep_ready = bq76952_prepareSleepWithReg2();
             }
 
             if ((alert_ready == true) &&
-                (bq_sleep_ready == true) &&
-                (HAL_GPIO_ReadPin(ALERT_GPIO_Port, ALERT_Pin) == MAINAPP_ALERT_IDLE_LEVEL))
+                (bq_sleep_ready == true))
             {
                 Disable_Power_Battery();
                 sleep_rc = power_manager_enter_low_power_sleep(MAINAPP_SLEEP_WAKEUP_MS);
@@ -257,23 +258,25 @@ void mainapp(void)
             }
             
         }
-        BMS_LOG_INFO("update done state=%s chgDis=%s dchDis=%s faults:Ov:%s, Uv:%s, Ot:%s,Dt:%s,Ut:%s,",
-                     BMS_StateName(tracking->state),
-                     tracking->chargeDisabled ? "true" : "false",
-                     tracking->dischargeDisabled ? "true" : "false",
-                     tracking->faults.cellOverVoltage ? "true" : "false",
-                     tracking->faults.cellUnderVoltage ? "true" : "false",
-                     tracking->faults.chargeOverTemperature ? "true" : "false",
-                     tracking->faults.dischargeOverTemperature ? "true" : "false",
-                     tracking->faults.underTemperature ? "true" : "false");
-     // Occ:%s,Dcc:%s,CGF:%s,DGF:%s,SC:%s,BQF:%s,Commu:%s
-        BMS_LOG_INFO("OCChg = %s, OCDsg = %s, CGF:%s,DGF:%s,SC:%s,BQF:%s,Commu:%s", 
-                     tracking->faults.chargeOverCurrent ? "true" : "false",
-                     tracking->faults.dischargeOverCurrent ? "true" : "false",
-                     tracking->chargeGateFaultSignal ? "true" : "false",
-                     tracking->dischargeGateFaultSignal ? "true" : "false",
-                     tracking->faults.shortCircuit ? "true" : "false",
-                     tracking->faults.bqSafetyFault ? "true" : "false",
-                     tracking->faults.communicationFault ? "true" : "false");
+        if(tracking->cellVoltages.IndexAccumulated[0] == 0)
+        {
+            BMS_LOG_INFO("update done state=%s chgDis=%s dchDis=%s faults:Ov:%s, Uv:%s, Ot:%s,Dt:%s,Ut:%s,",
+                        BMS_StateName(tracking->state),
+                        tracking->chargeDisabled ? "true" : "false",
+                        tracking->dischargeDisabled ? "true" : "false",
+                        tracking->faults.cellOverVoltage ? "true" : "false",
+                        tracking->faults.cellUnderVoltage ? "true" : "false",
+                        tracking->faults.chargeOverTemperature ? "true" : "false",
+                        tracking->faults.dischargeOverTemperature ? "true" : "false",
+                        tracking->faults.underTemperature ? "true" : "false");
+        // Occ:%s,Dcc:%s,CGF:%s,DGF:%s,SC:%s,BQF:%s,Commu:%s
+            BMS_LOG_INFO("OCChg = %s, OCDsg = %s ,SC:%s,BQF:%s,Commu:%s, delat t = %u", 
+                        tracking->faults.chargeOverCurrent ? "true" : "false",
+                        tracking->faults.dischargeOverCurrent ? "true" : "false",
+                        tracking->faults.shortCircuit ? "true" : "false",
+                        tracking->faults.bqSafetyFault ? "true" : "false",
+                        tracking->faults.communicationFault ? "true" : "false",
+                    (now - last_activity_tick));
+        }
     }
 }
