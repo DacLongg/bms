@@ -38,6 +38,17 @@
 #define BQ_POWER_CONFIG_DPSLP_LDO   0x0400U
 #define BQ_CONTROL_STATUS_DEEPSLEEP 0x0004U
 #define BQ_LOW_V_SHUTDOWN_DELAY     0x9243U
+#define BQ_SHUTDOWN_FET_OFF_DELAY   0x9252U
+#define BQ_SHUTDOWN_COMMAND_DELAY   0x9253U
+#define BQ_SHUTDOWN_AUTO_TIME       0x9254U
+#define BQ_SHUTDOWN_FET_OFF_DELAY_NONE  0U
+#define BQ_SHUTDOWN_COMMAND_DELAY_1S    4U
+#define BQ_SHUTDOWN_AUTO_TIME_DISABLED  0U
+#define BQ_SHUTDOWN_SUBCOMMAND_GAP_MS   5U
+#define BQ_SHUTDOWN_SEQUENCE_TIMEOUT_MS 1500U
+#define BQ_SHUTDOWN_BOOT_TIMEOUT_MS     500U
+#define BQ_SHUTDOWN_BOOT_POLL_MS        25U
+#define BQ_SECURITY_STATE_SEALED        3U
 #define BQ_CURRENT_CALIBRATION_DEFAULT_PPM 1000000UL
 #define BQ_CURRENT_CALIBRATION_PPM_DEN 1000000ULL
 #define BQ_CC_GAIN_DEFAULT_RAW      0x413F67F5UL
@@ -59,6 +70,7 @@
 #define SUBCMD_CBSTATUS1            0x0085U
 #define SUBCMD_DEEPSLEEP            0x000FU
 #define SUBCMD_EXIT_DEEPSLEEP       0x000EU
+#define SUBCMD_SHUTDOWN             0x0010U
 #define SUBCMD_SLEEP_ENABLE         0x0099U
 #define SUBCMD_SLEEP_DISABLE        0x009AU
 #define SUBCMD_REG12_CONTROL        0x0098U
@@ -132,6 +144,8 @@ static unsigned int bq76952_userVoltageCommandToMv(byte command);
 static uint16_t bq76952_dataMemoryExpectedValue(int16_t data, byte noOfBytes);
 static bool bq76952_readDataMemoryBytes(unsigned int addr, byte *data, byte noOfBytes);
 static bool bq76952_waitConfigUpdateMode(bool expected, uint32_t timeout_ms);
+static bool bq76952_shutdownRequiresDoubleCommand(void);
+static bool bq76952_waitShutdownSequenceStarted(uint32_t timeout_ms);
 static bool bq76952_writeDataMemoryPayload(unsigned int addr, int16_t data, byte noOfBytes);
 static bool bq76952_writeDataMemory(unsigned int addr, int16_t data, byte noOfBytes);
 static int16_t bq76952_clampTemperatureLimit(int temp, int fallback);
@@ -406,6 +420,37 @@ static bool bq76952_waitConfigUpdateMode(bool expected, uint32_t timeout_ms)
     } while ((HAL_GetTick() - start) < timeout_ms);
 
     return false;
+}
+
+static bool bq76952_shutdownRequiresDoubleCommand(void)
+{
+    unsigned int batt_status_raw = bq76952_getBatteryStatusRaw();
+    uint16_t security_state = (uint16_t)((batt_status_raw >> 8U) & 0x03U);
+
+    return (batt_status_raw == 0U) ||
+           (security_state == BQ_SECURITY_STATE_SEALED);
+}
+
+static bool bq76952_waitShutdownSequenceStarted(uint32_t timeout_ms)
+{
+    uint32_t start = HAL_GetTick();
+
+    do {
+        bq76952_battery_status_t batt_status;
+
+        if (!bq76952_isConnected()) {
+            return true;
+        }
+
+        batt_status = bq76952_getBatteryStatusRegister();
+        if (batt_status.bits.SHUTDOWN_PENDING != 0U) {
+            return true;
+        }
+
+        HAL_Delay(BQ_SHUTDOWN_BOOT_POLL_MS);
+    } while ((HAL_GetTick() - start) < timeout_ms);
+
+    return !bq76952_isConnected();
 }
 
 static bool bq76952_writeDataMemoryPayload(unsigned int addr, int16_t data, byte noOfBytes)
@@ -1296,7 +1341,51 @@ bool bq76952_configurePowerOutputs(void)
     status &= (uint8_t)bq76952_setEnableRegulator(true, true);
     return status != 0U;
 }
+#if BQ76952_LOW_POWER_MODE == BQ76952_LOW_POWER_MODE_SLEEP
+bool bq76952_prepareSleepWithReg2(void)
+{
+    bq76952_battery_status_t batt_status;
+    bq76952_applyReg12Control(true, true);
+    for(uint8_t count = 0; count < 10; count ++)
+    {
+        bq76952_subCommand(SUBCMD_SLEEP_ENABLE);
+        HAL_Delay(100U);
+        
+        batt_status = bq76952_getBatteryStatusRegister();
+        if(batt_status.bits.SLEEP_MODE != 0U)
+        {
+            break;
+        }
+    }
+    return batt_status.bits.SLEEP_MODE != 0U;
+}
 
+void bq76952_resumeFromSleep(void)
+{
+    bq76952_subCommand(SUBCMD_SLEEP_DISABLE);
+    HAL_Delay(1U);
+    bq76952_applyReg12Control(true, true);
+}
+
+bool bq76952_configureSleepWake(void)
+{
+    uint8_t status = 1U;
+    uint16_t power_config;
+
+    power_config = (uint16_t)bq76952_readDataMemory(POWER_CONFIG, 2);
+    if (power_config == 0U) {
+        return false;
+    }
+
+    /* Wake comparator chay cham nhat de giam nhieu; 500 mA la nguong min cua BQ76952. */
+    power_config &= (uint16_t)~BQ_POWER_CONFIG_WK_SPD_MASK;
+    status &= (uint8_t)bq76952_writeDataMemory(POWER_CONFIG, (int16_t)power_config, 2U);
+    status &= (uint8_t)bq76952_writeDataMemory(SLEEP_WAKE_COMPARATOR_CURRENT,
+                                               BQ_SLEEP_WAKE_COMPARATOR_CURRENT_MA,
+                                               2U);
+    return status != 0U;
+}
+#elif BQ76952_LOW_POWER_MODE == BQ76952_LOW_POWER_MODE_DEEPSLEEP
 bool bq76952_prepareSleepWithReg2(void)
 {
     unsigned int control_status = 0U;
@@ -1321,6 +1410,83 @@ void bq76952_resumeFromSleep(void)
     HAL_Delay(300U);
     bq76952_applyReg12Control(true, true);
 }
+
+bool bq76952_configureSleepWake(void)
+{
+    uint8_t status = 1U;
+    uint16_t power_config;
+
+    power_config = (uint16_t)bq76952_readDataMemory(POWER_CONFIG, 2);
+    if (power_config == 0U) {
+        return false;
+    }
+
+    /* Wake comparator chay cham nhat de giam nhieu; 500 mA la nguong min cua BQ76952. */
+    power_config &= (uint16_t)~BQ_POWER_CONFIG_WK_SPD_MASK;
+    power_config &= (uint16_t)~BQ_POWER_CONFIG_DPSLP_PD;
+    power_config |= BQ_POWER_CONFIG_DPSLP_LDO;
+    status &= (uint8_t)bq76952_writeDataMemory(POWER_CONFIG, (int16_t)power_config, 2U);
+    status &= (uint8_t)bq76952_writeDataMemory(BQ_LOW_V_SHUTDOWN_DELAY, 1, 1U);
+    status &= (uint8_t)bq76952_writeDataMemory(SLEEP_WAKE_COMPARATOR_CURRENT,
+                                               BQ_SLEEP_WAKE_COMPARATOR_CURRENT_MA,
+                                               2U);
+    return status != 0U;
+}
+#elif BQ76952_LOW_POWER_MODE == BQ76952_LOW_POWER_MODE_SHUTDOWN
+bool bq76952_prepareSleepWithReg2(void)
+{
+    bool send_second_shutdown = bq76952_shutdownRequiresDoubleCommand();
+
+    bq76952_setFET(ALL, OFF);
+    HAL_Delay(2U);
+
+    bq76952_subCommand(SUBCMD_SHUTDOWN);
+    HAL_Delay(BQ_SHUTDOWN_SUBCOMMAND_GAP_MS);
+
+    if (send_second_shutdown) {
+        bq76952_subCommand(SUBCMD_SHUTDOWN);
+        HAL_Delay(BQ_SHUTDOWN_SUBCOMMAND_GAP_MS);
+    }
+
+    return bq76952_waitShutdownSequenceStarted(BQ_SHUTDOWN_SEQUENCE_TIMEOUT_MS);
+}
+
+void bq76952_resumeFromSleep(void)
+{
+    uint32_t start = HAL_GetTick();
+
+    bq76952_begin();
+    do {
+        if (bq76952_isConnected()) {
+            bq76952_applyReg12Control(true, true);
+            return;
+        }
+        HAL_Delay(BQ_SHUTDOWN_BOOT_POLL_MS);
+    } while ((HAL_GetTick() - start) < BQ_SHUTDOWN_BOOT_TIMEOUT_MS);
+}
+
+bool bq76952_configureSleepWake(void)
+{
+    uint8_t status = 1U;
+
+    /* In SHUTDOWN the BQ loses RAM settings and I2C stops. Wake must be done by
+     * TS2, LD/charger, or RST_SHUT hardware; firmware can only start the sequence.
+     * This board schematic shows TS2 connected to RT2, which can prevent true
+     * lowest-current shutdown if that NTC pulls TS2 below the wake threshold.
+     */
+    status &= (uint8_t)bq76952_writeDataMemory(BQ_SHUTDOWN_FET_OFF_DELAY,
+                                               BQ_SHUTDOWN_FET_OFF_DELAY_NONE,
+                                               1U);
+    status &= (uint8_t)bq76952_writeDataMemory(BQ_SHUTDOWN_COMMAND_DELAY,
+                                               BQ_SHUTDOWN_COMMAND_DELAY_1S,
+                                               1U);
+    status &= (uint8_t)bq76952_writeDataMemory(BQ_LOW_V_SHUTDOWN_DELAY, 1, 1U);
+    status &= (uint8_t)bq76952_writeDataMemory(BQ_SHUTDOWN_AUTO_TIME,
+                                               BQ_SHUTDOWN_AUTO_TIME_DISABLED,
+                                               1U);
+    return status != 0U;
+}
+#endif
 
 bool bq76952_setDA_Config(void)
 {
@@ -1408,27 +1574,7 @@ bool bq76952_setDefaultAlarmMaskConfig(void)
     return status;
 }
 
-bool bq76952_configureSleepWake(void)
-{
-    uint8_t status = 1U;
-    uint16_t power_config;
 
-    power_config = (uint16_t)bq76952_readDataMemory(POWER_CONFIG, 2);
-    if (power_config == 0U) {
-        return false;
-    }
-
-    /* Wake comparator chay cham nhat de giam nhieu; 500 mA la nguong min cua BQ76952. */
-    power_config &= (uint16_t)~BQ_POWER_CONFIG_WK_SPD_MASK;
-    power_config &= (uint16_t)~BQ_POWER_CONFIG_DPSLP_PD;
-    power_config |= BQ_POWER_CONFIG_DPSLP_LDO;
-    status &= (uint8_t)bq76952_writeDataMemory(POWER_CONFIG, (int16_t)power_config, 2U);
-    status &= (uint8_t)bq76952_writeDataMemory(BQ_LOW_V_SHUTDOWN_DELAY, 1, 1U);
-    status &= (uint8_t)bq76952_writeDataMemory(SLEEP_WAKE_COMPARATOR_CURRENT,
-                                               BQ_SLEEP_WAKE_COMPARATOR_CURRENT_MA,
-                                               2U);
-    return status != 0U;
-}
 
 bool bq76952_setVcellMode(uint16_t vcell_mode)
 {

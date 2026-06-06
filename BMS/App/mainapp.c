@@ -144,9 +144,11 @@ static bool MainApp_IsPackSleepEligible(const BMS_Tracking_t *tracking)
     if (tracking->charging || tracking->discharging) {
         return false;
     }
+#if !BQ76952_LOW_POWER_MODE_IS_SHUTDOWN
     if (!tracking->bqSleepAllowed) {
         return false;
     }
+#endif
     return true;
 }
 
@@ -216,10 +218,14 @@ void mainapp(void)
             if ((alert_ready == true) &&
                 (bq_sleep_ready == true))
             {
+#if !BQ76952_LOW_POWER_MODE_IS_SHUTDOWN
                 Disable_Power_Battery();
+#endif
                 sleep_rc = power_manager_enter_low_power_sleep(MAINAPP_SLEEP_WAKEUP_MS);
                 wake_source = power_manager_get_and_clear_wakeup_source();
+#if !BQ76952_LOW_POWER_MODE_IS_SHUTDOWN
                 Enable_Power_Battery();
+#endif
                 bq76952_resumeFromSleep();
                 BMS_Update();
                 bms_uart_task();
