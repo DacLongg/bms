@@ -1068,7 +1068,7 @@ bool bq76952_isDischargeFetOn(void)
 
 bool bq76952_setCellBalancingEnabled(bool enabled)
 {
-    byte cfg = enabled ? (BQ_CB_CONFIG_CHARGE | BQ_CB_CONFIG_RELAX | BQ_CB_CONFIG_SLEEP) : 0U;
+    byte cfg = enabled ?  0x08U : (BQ_CB_CONFIG_CHARGE | BQ_CB_CONFIG_RELAX | BQ_CB_CONFIG_SLEEP);
 
     return bq76952_writeDataMemory(BALANCING_CONFIGURATION, cfg, 1U);
 }
