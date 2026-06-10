@@ -11,6 +11,9 @@
 extern "C" {
 #endif
 
+/* Địa chỉ I2C 7-bit của BQ76952 khi giao tiếp ở chế độ chuẩn. */
+#define BQ_I2C_ADDR                 0x08U
+
 #define BQ76952_LOW_POWER_MODE_SLEEP     1U
 #define BQ76952_LOW_POWER_MODE_DEEPSLEEP 2U
 #define BQ76952_LOW_POWER_MODE_SHUTDOWN  3U
@@ -484,11 +487,14 @@ typedef struct
 
 }BQ76952_RawInfo_t;
 
+/* Khởi tạo tầng I2C software dùng bởi driver này. */
+#define bq76952_begin()  I2C_Soft_Init()
+#define bq76952_write_register(reg, data, len)  (I2C_Soft_WriteDataFromAddress(BQ_I2C_ADDR, reg, (uint8_t *)data, len) == E_OK)
+#define bq76952_read_register(reg, data, len)   (I2C_Soft_ReadDataFromAddress(BQ_I2C_ADDR, reg, data, len) == E_OK)
 
 /* Khởi tạo driver/I2C và kiểm tra metadata cơ bản; BMS chịu trách nhiệm cấu hình runtime. */
 void bq76952_init(void);
-/* Khởi tạo tầng I2C software dùng bởi driver này. */
-void bq76952_begin(void);
+
 /* Reset mềm IC bằng subcommand reset. */
 void bq76952_reset(void);
 /* Chuyển IC vào Config Update mode trước khi ghi data memory. */
@@ -544,7 +550,11 @@ bool bq76952_isDischarging(void);
 /* Legacy alias for bq76952_isChargeFetOn(). */
 bool bq76952_isCharging(void);
 /* Bật/tắt host/manual cell balancing trong data memory của BQ. */
-bool bq76952_setCellBalancingEnabled(bool enabled);
+bool bq76952_ConfigManualCellBalancing(int8_t min_cell_temp_c,
+                                              int8_t max_cell_temp_c,
+                                              int8_t max_internal_temp_c,
+                                              uint8_t interval_s,
+                                              uint8_t max_cells);
 /* Cấu hình BQ tự chọn cell balancing trong charge/relax/sleep theo policy truyền vào. */
 bool bq76952_configureAutonomousCellBalancing(uint16_t min_cell_mv,
                                               uint8_t start_delta_mv,
