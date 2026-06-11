@@ -9,14 +9,14 @@ extern UART_HandleTypeDef huart2;
 extern LPTIM_HandleTypeDef hlptim1;
 
 #define MAINAPP_BMS_UPDATE_MS 100U
-#define MAINAPP_IDLE_BEFORE_SLEEP_MINUTES 1U
-#define MAINAPP_SLEEP_WAKEUP_HOURS 2U
+#define MAINAPP_IDLE_BEFORE_SLEEP_MINUTES 3U
+#define MAINAPP_SLEEP_WAKEUP_MINUTE 5U
 #define MAINAPP_ALERT_WAKE_CLEAR_TRIES 3U
 #define MAINAPP_ALERT_WAKE_SETTLE_MS 2U
 #define MAINAPP_ALERT_IDLE_LEVEL GPIO_PIN_RESET
 
 #define MAINAPP_IDLE_BEFORE_SLEEP_MS ((uint32_t)(MAINAPP_IDLE_BEFORE_SLEEP_MINUTES) * 60UL * 1000UL)
-#define MAINAPP_SLEEP_WAKEUP_MS ((uint32_t)(MAINAPP_SLEEP_WAKEUP_HOURS) * 60UL * 60UL * 1000UL)
+#define MAINAPP_SLEEP_WAKEUP_MS ((uint32_t)(MAINAPP_SLEEP_WAKEUP_MINUTE) * 60UL * 1000UL)
 
 #if BMS_DEBUG_LOG_ENABLE
 // static const char *BMS_StateName(BMS_State_t state)
@@ -135,20 +135,20 @@ static bool MainApp_IsPackSleepEligible(const BMS_Tracking_t *tracking)
     if (BMS_IsFaultActive()) {
         return false;
     }
-    if (tracking->balanceRequired || (tracking->balanceMask != 0U)) {
-        return false;
-    }
+    // if (tracking->balanceRequired || (tracking->balanceMask != 0U)) {
+    //     return false;
+    // }
     if (tracking->currentDirection != BMS_CURRENT_IDLE) {
         return false;
     }
     if (tracking->charging || tracking->discharging) {
         return false;
     }
-#if !BQ76952_LOW_POWER_MODE_IS_SHUTDOWN
-    if (!tracking->bqSleepAllowed) {
-        return false;
-    }
-#endif
+// #if !BQ76952_LOW_POWER_MODE_IS_SHUTDOWN
+//     if (!tracking->bqSleepAllowed) {
+//         return false;
+//     }
+// #endif
     return true;
 }
 
@@ -180,7 +180,7 @@ void mainapp(void)
         initialized = true;
         BMS_LOG_INFO("mainapp init sleepX=%lu min wakeY=%lu s",
                      (unsigned long)MAINAPP_IDLE_BEFORE_SLEEP_MINUTES,
-                     (unsigned long)MAINAPP_SLEEP_WAKEUP_HOURS);
+                     (unsigned long)MAINAPP_SLEEP_WAKEUP_MINUTE);
         // BMS_Set_5V_Output(false);
     }
 

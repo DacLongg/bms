@@ -864,7 +864,8 @@ static void BMS_ApplyFetPolicy(BMS_Tracking_t *tracking)
         return;
     }
 
-    if(state == 1)
+    if(tracking->state == BMS_STATE_NORMAL && (tracking->bqAlarmRawStatus.bit.XCHG || tracking->bqAlarmRawStatus.bit.XDSG) \
+    && !tracking->bqAlarmRawStatus.bit.SSA && !tracking->bqAlarmRawStatus.bit.SSBC)
     {
         BMS_SetFetoff(false);
         bq76952_setFET(ALL, ON);
