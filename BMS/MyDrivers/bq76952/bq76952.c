@@ -1,7 +1,6 @@
 #include "bq76952.h"
 
-/* Địa chỉ I2C 7-bit của BQ76952 khi giao tiếp ở chế độ chuẩn. */
-#define BQ_I2C_ADDR                 0x08U
+
 
 /* Vùng thanh ghi command/response trực tiếp của BQ76952.
  * 0x3E/0x3F: ghi subcommand hoặc data-memory address.
@@ -128,8 +127,8 @@ static bq76952_write_verify_t g_last_write_verify;
 
 BQ76952_RawInfo_t BQ_RawInfo;
 
-static bool bq76952_write_register(byte reg, const byte *data, uint16_t len);
-static bool bq76952_read_register(byte reg, byte *data, uint16_t len);
+// static bool bq76952_write_register(byte reg, const byte *data, uint16_t len);
+// static bool bq76952_read_register(byte reg, byte *data, uint16_t len);
 static unsigned int bq76952_directCommand(byte command);
 static bool bq76952_writeDirectCommand(byte command, uint16_t data);
 static void bq76952_subCommand(unsigned int data);
@@ -155,23 +154,23 @@ static int16_t bq76952_deciKelvinToCelsius(uint16_t raw_deci_kelvin);
 static void bq76952_fillOTPStatusSnapshot(bq76952_otp_status_t *status);
 static bool bq76952_otpResultIsOk(uint8_t result);
 
-/* Driver hiện tại dùng lớp I2C software riêng thay vì HAL I2C trực tiếp. */
-void bq76952_begin(void)
-{
-    I2C_Soft_Init();
-}
+// /* Driver hiện tại dùng lớp I2C software riêng thay vì HAL I2C trực tiếp. */
+// void bq76952_begin(void)
+// {
+//     I2C_Soft_Init();
+// }
 
-/* Ghi liên tiếp len byte vào một thanh ghi bắt đầu tại reg. */
-static bool bq76952_write_register(byte reg, const byte *data, uint16_t len)
-{
-    return I2C_Soft_WriteDataFromAddress(BQ_I2C_ADDR, reg, (uint8_t *)data, len) == E_OK;
-}
+// /* Ghi liên tiếp len byte vào một thanh ghi bắt đầu tại reg. */
+// static bool bq76952_write_register(byte reg, const byte *data, uint16_t len)
+// {
+//     return I2C_Soft_WriteDataFromAddress(BQ_I2C_ADDR, reg, (uint8_t *)data, len) == E_OK;
+// }
 
 /* Đọc liên tiếp len byte từ một thanh ghi bắt đầu tại reg. */
-static bool bq76952_read_register(byte reg, byte *data, uint16_t len)
-{
-    return I2C_Soft_ReadDataFromAddress(BQ_I2C_ADDR, reg, data, len) == E_OK;
-}
+// static bool bq76952_read_register(byte reg, byte *data, uint16_t len)
+// {
+//     return I2C_Soft_ReadDataFromAddress(BQ_I2C_ADDR, reg, data, len) == E_OK;
+// }
 
 /* Gửi direct command loại 2 byte rồi ghép little-endian thành unsigned int. */
 static unsigned int bq76952_directCommand(byte command)
@@ -1068,11 +1067,20 @@ bool bq76952_isDischargeFetOn(void)
     return BQ_RawInfo.FetStatus.bit.DSG_FET;
 }
 
-bool bq76952_setCellBalancingEnabled(bool enabled)
+bool bq76952_ConfigManualCellBalancing(int8_t min_cell_temp_c,
+                                              int8_t max_cell_temp_c,
+                                              int8_t max_internal_temp_c,
+                                              uint8_t interval_s,
+                                              uint8_t max_cells)
 {
-    byte cfg = enabled ? (BQ_CB_CONFIG_CHARGE | BQ_CB_CONFIG_RELAX | BQ_CB_CONFIG_SLEEP) : 0U;
+    byte cfg = 0x08;
+    bq76952_writeDataMemory(BALANCING_CONFIGURATION, cfg, 1U);
+    bq76952_writeDataMemory(CELL_BALANCE_MIN_CELL_TEMP, min_cell_temp_c, 1U);
+    bq76952_writeDataMemory(CELL_BALANCE_MAX_CELL_TEMP, max_cell_temp_c, 1U);
+    bq76952_writeDataMemory(CELL_BALANCE_MAX_INTERNAL_TEMP, max_internal_temp_c, 1U);
+    bq76952_writeDataMemory(CELL_BALANCE_INTERVAL, interval_s, 1U);
+    return bq76952_writeDataMemory(CELL_BALANCE_MAX_CELLS, max_cells, 1U);
 
-    return bq76952_writeDataMemory(BALANCING_CONFIGURATION, cfg, 1U);
 }
 
 bool bq76952_configureAutonomousCellBalancing(uint16_t min_cell_mv,

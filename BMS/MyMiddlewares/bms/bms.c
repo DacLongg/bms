@@ -385,16 +385,12 @@ static void BMS_ConfigureMonitor(void)
                                       BMS_UNDERTEMP_CUTOFF_C,
                                       BMS_UNDERTEMP_RECOVER_C,
                                       BMS_BQ_TEMPERATURE_PROTECTION_DELAY_SEC));
-    BMS_BQ_CONFIG_STEP(config_ok, bq76952_setCellBalancingEnabled(true));
-    // BMS_BQ_CONFIG_STEP(config_ok, bq76952_configureAutonomousCellBalancing(
-    //                                   BMS_BALANCE_MIN_CELL_MV,
-    //                                   BMS_BALANCE_DELTA_MV,
-    //                                   BMS_BALANCE_DELTA_MV_RECOVERY,
-    //                                   BMS_BALANCE_MIN_TEMP_C,
-    //                                   BMS_BALANCE_MAX_TEMP_C,
-    //                                   BMS_BALANCE_MAX_INTERNAL_TEMP_C,
-    //                                   BMS_BALANCE_INTERVAL_SEC,
-    //                                   BMS_BALANCE_MAX_ACTIVE_CELLS));
+    BMS_BQ_CONFIG_STEP(config_ok, bq76952_ConfigManualCellBalancing(BMS_BALANCE_MIN_TEMP_C,
+                                      BMS_BALANCE_MAX_TEMP_C,
+                                      BMS_BALANCE_MAX_INTERNAL_TEMP_C,
+                                      BMS_BALANCE_INTERVAL_SEC,
+                                      BMS_BALANCE_MAX_ACTIVE_CELLS));
+
 
     over_current_sense_mV = (((uint32_t)BMS_OVER_CURRENT_DISCHARGE * BMS_BQ_SENSE_RESISTOR_UOHM) + 500000UL) / 1000000UL;
     over_current_chargr_mV = (((uint32_t)BMS_OVER_CURRENT_CHARGE * BMS_BQ_SENSE_RESISTOR_UOHM) + 500000UL) / 1000000UL;
@@ -957,10 +953,13 @@ static void BMS_UpdateCoulombCounter(BMS_Tracking_t *tracking, uint32_t dt_ms)
 
 static void BMS_UpdateBalancing(BMS_Tracking_t *tracking, uint32_t now)
 {
-    uint16_t requested_mask = 0U;
-    bool previous_selected = false;
     static uint32_t g_last_balance_tick = 0;
     bool balance_allowed;
+    static uint16_t requested_mask = 0U;
+    uint16_t previous_mask = requested_mask;
+    uint16_t selected_mask = 0U;
+    uint16_t delta[BMS_NUMBER_OF_CELLS] = {0U};
+    bool candidate[BMS_NUMBER_OF_CELLS] = {false};
 
     if (tracking == NULL) {
         return;
@@ -993,29 +992,67 @@ static void BMS_UpdateBalancing(BMS_Tracking_t *tracking, uint32_t now)
     g_last_balance_tick = now;
 
     for (uint8_t i = 0U; i < BMS_NUMBER_OF_CELLS; ++i) {
-        bool select_cell = false;
+        bool was_selected = (previous_mask & (uint16_t)(1U << i)) != 0U;
+
+        if (tracking->cellVoltages.cellNum[i] >= tracking->cellVoltages.minCellVoltage) {
+            delta[i] = tracking->cellVoltages.cellNum[i] - tracking->cellVoltages.minCellVoltage;
+        }
 
         if (tracking->cellVoltages.cellNum[i] < BMS_BALANCE_MIN_CELL_MV) {
-            previous_selected = false;
             continue;
         }
 
-        if ((tracking->cellVoltages.cellNum[i] + BMS_BALANCE_DELTA_MV_RECOVERY) <= tracking->cellVoltages.maxCellVoltage &&
-            tracking->cellVoltages.cellNum[i] < tracking->cellVoltages.maxCellVoltage) {
-            previous_selected = false;
-            continue;
-        }
-
-        if (tracking->cellVoltages.cellNum[i] >= (uint16_t)(tracking->cellVoltages.minCellVoltage + BMS_BALANCE_DELTA_MV_RECOVERY)) {
-            select_cell = true;
-        }
-
-        if (select_cell && !previous_selected) {
-            requested_mask |= (uint16_t)(1U << i);
-            previous_selected = true;
+        if (was_selected) {
+            candidate[i] = delta[i] >= BMS_BALANCE_DELTA_MV_RECOVERY;
         } else {
-            previous_selected = false;
+            candidate[i] = delta[i] > BMS_BALANCE_DELTA_MV;
         }
+    }
+
+    /* New cells enter above 30 mV; existing cells are held until below 20 mV. */
+    for (;;) {
+        int best = -1;
+
+        for (uint8_t i = 0U; i < BMS_NUMBER_OF_CELLS; ++i) {
+            bool current_was_selected;
+            bool best_was_selected;
+
+            if (!candidate[i]) {
+                continue;
+            }
+
+            if (best < 0) {
+                best = (int)i;
+                continue;
+            }
+
+            if (delta[i] > delta[best]) {
+                best = (int)i;
+                continue;
+            }
+
+            if (delta[i] < delta[best]) {
+                continue;
+            }
+
+            current_was_selected = (previous_mask & (uint16_t)(1U << i)) != 0U;
+            best_was_selected = (previous_mask & (uint16_t)(1U << best)) != 0U;
+            if (current_was_selected && !best_was_selected) {
+                best = (int)i;
+            }
+        }
+
+        if (best < 0) {
+            break;
+        }
+
+        if (((best == 0) ||
+             ((selected_mask & (uint16_t)(1U << (uint8_t)(best - 1))) == 0U)) &&
+            (((uint8_t)best == (BMS_NUMBER_OF_CELLS - 1U)) ||
+             ((selected_mask & (uint16_t)(1U << (uint8_t)(best + 1))) == 0U))) {
+            selected_mask |= (uint16_t)(1U << (uint8_t)best);
+        }
+        candidate[best] = false;
     }
 
     tracking->balanceMask = requested_mask;
