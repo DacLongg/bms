@@ -22,7 +22,7 @@ TARGET = BMS
 # debug build?
 DEBUG = 1
 # optimization
-OPT = -Og
+OPT = -Os
 
 
 #######################################
@@ -212,9 +212,6 @@ $(BUILD_CONFIG_FILE): FORCE | $(BUILD_DIR)
 
 $(BUILD_DIR)/%.o: %.c Makefile $(BUILD_CONFIG_FILE) | $(BUILD_DIR) 
 	$(CC) -c $(CFLAGS) -Wa,-a,-ad,-alms=$(BUILD_DIR)/$(notdir $(<:.c=.lst)) $< -o $@
-
-$(BUILD_DIR)/bq76952.o: OPT = -O0
-$(BUILD_DIR)/bq76952.o: CFLAGS += -fno-inline -fno-omit-frame-pointer
 
 $(BUILD_DIR)/%.o: %.s Makefile $(BUILD_CONFIG_FILE) | $(BUILD_DIR)
 	$(AS) -c $(CFLAGS) $< -o $@
