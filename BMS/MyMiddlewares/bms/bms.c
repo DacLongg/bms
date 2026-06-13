@@ -31,30 +31,23 @@
 #define BMS_BAT_ADC_CAL_NUM                     955UL
 #define BMS_BAT_ADC_CAL_DEN                     1000UL
 
-#define BMS_BQ_CONFIG_STEP(ok_var, expr) \
-    do { \
-        (ok_var) &= (uint8_t)(expr); \
-    } while (0)
+#define BMS_BQ_CONFIG_STEP(ok_var, expr)        (ok_var) &= (uint8_t)(expr); \
+
 
 static BMS_Tracking_t g_bms_tracking;
 static uint32_t g_last_update_tick;
 
-static uint32_t g_last_flash_save_tick;
-static uint32_t g_last_saved_charge_mAh;
-static uint32_t g_last_saved_discharge_mAh;
-static uint16_t g_last_logged_balance_mask;
+
 static volatile bool g_alert_irq_pending;
 static volatile uint32_t g_alert_irq_counter;
-static volatile bool g_dchg_signal_active;
-static volatile bool g_ddsg_signal_active;
-static uint32_t g_last_alert_service_tick;
-static uint32_t g_last_bat_adc_sample_tick;
+// static volatile bool g_dchg_signal_active;
+// static volatile bool g_ddsg_signal_active;
+
+
 static bool g_shutdown_pulse_active;
 static uint32_t g_shutdown_pulse_tick;
-static bool g_charge_oc_recovery_pending;
-static bool g_discharge_oc_recovery_pending;
-static uint32_t g_charge_oc_recovery_tick;
-static uint32_t g_discharge_oc_recovery_tick;
+
+
 
 static void BMS_ResetTracking(void);
 static void BMS_ConfigureMonitor(void);
@@ -108,9 +101,8 @@ void BMS_Init(void)
     BMS_LoadPersistedData(&g_bms_tracking);
     BMS_ConfigureMonitor();
     g_last_update_tick = HAL_GetTick();
-    g_last_flash_save_tick = g_last_update_tick;
-    g_last_alert_service_tick = g_last_update_tick;
-    g_last_bat_adc_sample_tick = g_last_update_tick;
+    // g_last_alert_service_tick = g_last_update_tick;
+    // g_last_bat_adc_sample_tick = g_last_update_tick;
 
     BMS_Update();
 }
@@ -170,31 +162,28 @@ bool BMS_IsFaultActive(void)
            g_bms_tracking.faults.communicationFault;
 }
 
-bool BMS_CalibrateCurrent(int32_t actual_mA, BMS_CurrentCalibrationResult_t *result)
+uint8_t BMS_CalibrateCurrent(int32_t actual_mA, BMS_CurrentCalibrationResult_t *result)
 {
+    BMS_CurrentCalibStatus_t Status;
     BMS_CurrentCalibrationResult_t local = {0};
     uint32_t actual_abs;
     uint32_t measured_abs;
     uint32_t diff_abs;
-    uint32_t old_gain;
     uint64_t numerator;
 
-    local.actual_mA = actual_mA;
-    local.measured_mA = (int32_t)bq76952_getCurrentAvg();
-    old_gain = g_bms_tracking.currentCalibrationGainPpm;
-    if (old_gain == 0UL) {
-        old_gain = BMS_CURRENT_CALIBRATION_DEFAULT_PPM;
+    measured_abs = (int32_t)bq76952_getCurrentAvg();
+    if (g_bms_tracking.currentCalibrationGainPpm == 0UL) {
+        g_bms_tracking.currentCalibrationGainPpm = BMS_CURRENT_CALIBRATION_DEFAULT_PPM;
     }
-    local.oldGain_ppm = old_gain;
-    local.newGain_ppm = old_gain;
+    local.newGain_ppm = g_bms_tracking.currentCalibrationGainPpm;
 
-    actual_abs = BMS_AbsCurrentU32(actual_mA);
-    measured_abs = BMS_AbsCurrentU32(local.measured_mA);
+    actual_abs = BMS_AbsCurrent(actual_mA);
+    measured_abs = BMS_AbsCurrent(measured_abs);
 
     if (actual_abs == 0UL) {
-        local.status = BMS_CURRENT_CALIBRATION_BAD_INPUT;
+        Status = BMS_CURRENT_CALIBRATION_BAD_INPUT;
     } else if (measured_abs == 0UL) {
-        local.status = BMS_CURRENT_CALIBRATION_ZERO_READING;
+        Status = BMS_CURRENT_CALIBRATION_ZERO_READING;
     } else {
         diff_abs = (actual_abs > measured_abs) ?
                    (actual_abs - measured_abs) :
@@ -204,17 +193,17 @@ bool BMS_CalibrateCurrent(int32_t actual_mA, BMS_CurrentCalibrationResult_t *res
                                          (uint64_t)actual_abs);
 
         if (local.deviation_ppm > BMS_CURRENT_CALIBRATION_MAX_DEVIATION_PPM) {
-            local.status = BMS_CURRENT_CALIBRATION_DEVIATION_TOO_HIGH;
+            Status = BMS_CURRENT_CALIBRATION_DEVIATION_TOO_HIGH;
         } else {
-            numerator = ((uint64_t)old_gain * (uint64_t)actual_abs) +
+            numerator = ((uint64_t)g_bms_tracking.currentCalibrationGainPpm * (uint64_t)actual_abs) +
                         ((uint64_t)measured_abs / 2ULL);
             local.newGain_ppm = (uint32_t)(numerator / (uint64_t)measured_abs);
             if ((local.newGain_ppm == 0UL) ||
                 !bq76952_setCurrentSenseCalibration(local.newGain_ppm) ||
                 !BMS_SaveCurrentCalibration(local.newGain_ppm)) {
-                local.status = BMS_CURRENT_CALIBRATION_WRITE_FAILED;
+                Status = BMS_CURRENT_CALIBRATION_WRITE_FAILED;
             } else {
-                local.status = BMS_CURRENT_CALIBRATION_OK;
+                Status = BMS_CURRENT_CALIBRATION_OK;
             }
         }
     }
@@ -224,35 +213,36 @@ bool BMS_CalibrateCurrent(int32_t actual_mA, BMS_CurrentCalibrationResult_t *res
     }
 
     BMS_LOG_INFO("current cal status=%u actual=%ld measured=%ld dev=%lu old=%lu new=%lu",
-                 (unsigned int)local.status,
-                 (long)local.actual_mA,
-                 (long)local.measured_mA,
+                 (unsigned int)Status,
+                 (long)actual_abs,
+                 (long)measured_abs,
                  (unsigned long)local.deviation_ppm,
-                 (unsigned long)local.oldGain_ppm,
+                 (unsigned long)g_bms_tracking.currentCalibrationGainPpm,
                  (unsigned long)local.newGain_ppm);
 
-    return local.status == BMS_CURRENT_CALIBRATION_OK;
+    return (uint8_t)Status;
 }
 
 void BMS_Error_Handler(void)
 {
     BMS_LOG_ERROR("bms error handler");
-    g_bms_tracking.connected = false;
-    g_bms_tracking.fetsEnabled = false;
-    g_bms_tracking.chargeFetEnabled = false;
-    g_bms_tracking.dischargeFetEnabled = false;
-    g_bms_tracking.charging = false;
-    g_bms_tracking.discharging = false;
-    g_bms_tracking.chargeDisabled = true;
-    g_bms_tracking.dischargeDisabled = true;
-    g_bms_tracking.state = BMS_STATE_FAULT;
-    g_bms_tracking.bqChargeFetBlocked = false;
-    g_bms_tracking.bqDischargeFetBlocked = false;
-    g_bms_tracking.bqAlarmRawStatus.raw = 0U;
-    g_bms_tracking.balanceMask = 0U;
-    g_bms_tracking.balanceRequired = false;
-    g_bms_tracking.fetOffAsserted = true;
-    g_bms_tracking.batSenseEnabled = false;
+    BMS_ResetTracking();
+    // g_bms_tracking.connected = false;
+    // g_bms_tracking.fetsEnabled = false;
+    // g_bms_tracking.chargeFetEnabled = false;
+    // g_bms_tracking.dischargeFetEnabled = false;
+    // g_bms_tracking.charging = false;
+    // g_bms_tracking.discharging = false;
+    // g_bms_tracking.chargeDisabled = true;
+    // g_bms_tracking.dischargeDisabled = true;
+    // g_bms_tracking.state = BMS_STATE_FAULT;
+    // g_bms_tracking.bqChargeFetBlocked = false;
+    // g_bms_tracking.bqDischargeFetBlocked = false;
+    // g_bms_tracking.bqAlarmRawStatus.raw = 0U;
+    // g_bms_tracking.balanceMask = 0U;
+    // g_bms_tracking.balanceRequired = false;
+    // g_bms_tracking.fetOffAsserted = true;
+    // g_bms_tracking.batSenseEnabled = false;
     bq76952_setCellBalanceMask(0U);
     bq76952_setFET(ALL, OFF);
     BMS_SetFetoff(true);
@@ -279,56 +269,64 @@ void BMS_RequestShutdown(void)
 static void BMS_ResetTracking(void)
 {
     /* Reset all cell voltages */
-    for (uint8_t i = 0U; i < BMS_NUMBER_OF_CELLS; ++i) {
-        g_bms_tracking.cellVoltages.cellNum[i] = 0U;
-        g_bms_tracking.cellVoltages.RealTimeAccumulated[i] = 0;
-        g_bms_tracking.cellVoltages.IndexAccumulated[i] = 0;
+    uint8_t *Tracking_Ptr = (uint8_t *)&g_bms_tracking;
+    for(uint8_t i = 0; i < sizeof(BMS_Tracking_t); i ++)
+    {
+        Tracking_Ptr[i] = 0;
     }
-
-    for (uint8_t i = 0U; i < BMS_NUMBER_OF_THERMISTORS; ++i) {
-        g_bms_tracking.temperature[i] = 0;
-    }
-
-    g_bms_tracking.initialized          = false;
-    g_bms_tracking.connected            = false;
-    g_bms_tracking.state                = BMS_STATE_INIT;
-    g_bms_tracking.currentDirection     = BMS_CURRENT_IDLE;
-    g_bms_tracking.circle_counter       = 0U;
-    g_bms_tracking.stackVoltage         = 0U;
-    g_bms_tracking.packVoltage          = 0U;
-    g_bms_tracking.cellVoltages.minCellVoltage       = 0U;
-    g_bms_tracking.cellVoltages.maxCellVoltage       = 0U;
-    g_bms_tracking.cellVoltages.averageCellVoltage   = 0U;
-    g_bms_tracking.cellVoltages.deltaCellVoltage     = 0U;
-    g_bms_tracking.current_mA           = 0;
-    g_bms_tracking.charging             = false;
-    g_bms_tracking.discharging          = false;
-    g_bms_tracking.chargeFetEnabled     = false;
-    g_bms_tracking.dischargeFetEnabled  = false;
-    g_bms_tracking.fetsEnabled          = false;
-    g_bms_tracking.bqChargeFetBlocked   = false;
-    g_bms_tracking.bqDischargeFetBlocked    = false;
-    g_bms_tracking.bqAlarmRawStatus.raw         = 0U;
-    g_bms_tracking.faults                   = (BMS_FaultFlags_t){0};
     g_bms_tracking.chargeDisabled           = true;
     g_bms_tracking.dischargeDisabled        = true;
-    g_bms_tracking.chargeGateFaultSignal    = false;
-    g_bms_tracking.dischargeGateFaultSignal = false;
-    g_bms_tracking.fetOffAsserted           = false;
-    g_bms_tracking.alertActive              = false;
-    g_bms_tracking.alertCounter             = 0UL;
-    g_bms_tracking.bqSleepMode              = false;
-    g_bms_tracking.bqSleepAllowed           = false;
-    g_bms_tracking.batSenseEnabled          = false;
-    g_bms_tracking.batAdcEstimatedPack_mV   = 0U;
-    g_bms_tracking.balanceRequired          = false;
-    g_bms_tracking.balanceMask              = 0U;
-    g_bms_tracking.chargeAccumulated_mAs    = 0ULL;
-    g_bms_tracking.dischargeAccumulated_mAs = 0ULL;
-    g_bms_tracking.chargeThroughput_mAh     = 0UL;
-    g_bms_tracking.dischargeThroughput_mAh  = 0UL;
-    g_bms_tracking.equivalentCycle_milliCycles  = 0UL;
     g_bms_tracking.currentCalibrationGainPpm    = BMS_CURRENT_CALIBRATION_DEFAULT_PPM;
+
+    // for (uint8_t i = 0U; i < BMS_NUMBER_OF_CELLS; ++i) {
+    //     g_bms_tracking.cellVoltages.cellNum[i] = 0U;
+    //     g_bms_tracking.cellVoltages.RealTimeAccumulated[i] = 0;
+    //     g_bms_tracking.cellVoltages.IndexAccumulated[i] = 0;
+    // }
+
+    // for (uint8_t i = 0U; i < BMS_NUMBER_OF_THERMISTORS; ++i) {
+    //     g_bms_tracking.temperature[i] = 0;
+    // }
+    
+    // g_bms_tracking.initialized          = false;
+    // g_bms_tracking.connected            = false;
+    // g_bms_tracking.state                = BMS_STATE_INIT;
+    // g_bms_tracking.currentDirection     = BMS_CURRENT_IDLE;
+    // g_bms_tracking.circle_counter       = 0U;
+    // g_bms_tracking.stackVoltage         = 0U;
+    // g_bms_tracking.packVoltage          = 0U;
+    // g_bms_tracking.cellVoltages.minCellVoltage       = 0U;
+    // g_bms_tracking.cellVoltages.maxCellVoltage       = 0U;
+    // g_bms_tracking.cellVoltages.averageCellVoltage   = 0U;
+    // g_bms_tracking.cellVoltages.deltaCellVoltage     = 0U;
+    // g_bms_tracking.current_mA           = 0;
+    // g_bms_tracking.charging             = false;
+    // g_bms_tracking.discharging          = false;
+    // g_bms_tracking.chargeFetEnabled     = false;
+    // g_bms_tracking.dischargeFetEnabled  = false;
+    // g_bms_tracking.fetsEnabled          = false;
+    // g_bms_tracking.bqChargeFetBlocked   = false;
+    // g_bms_tracking.bqDischargeFetBlocked    = false;
+    // g_bms_tracking.bqAlarmRawStatus.raw         = 0U;
+    // g_bms_tracking.faults                   = (BMS_FaultFlags_t){0};
+    // g_bms_tracking.chargeDisabled           = true;
+    // g_bms_tracking.dischargeDisabled        = true;
+    // g_bms_tracking.chargeGateFaultSignal    = false;
+    // g_bms_tracking.dischargeGateFaultSignal = false;
+    // g_bms_tracking.fetOffAsserted           = false;
+    // g_bms_tracking.alertActive              = false;
+    // g_bms_tracking.alertCounter             = 0UL;
+    // g_bms_tracking.bqSleepMode              = false;
+    // g_bms_tracking.bqSleepAllowed           = false;
+    // g_bms_tracking.batSenseEnabled          = false;
+    // g_bms_tracking.batAdcEstimatedPack_mV   = 0U;
+    // g_bms_tracking.balanceRequired          = false;
+    // g_bms_tracking.balanceMask              = 0U;
+    // g_bms_tracking.chargeAccumulated_mAs    = 0ULL;
+    // g_bms_tracking.dischargeAccumulated_mAs = 0ULL;
+    // g_bms_tracking.chargeThroughput_mAh     = 0UL;
+    // g_bms_tracking.equivalentCycle_milliCycles  = 0UL;
+    // g_bms_tracking.currentCalibrationGainPpm    = BMS_CURRENT_CALIBRATION_DEFAULT_PPM;
 }
 
 static void BMS_ConfigureMonitor(void)
@@ -360,8 +358,8 @@ static void BMS_ConfigureMonitor(void)
 
     BMS_BQ_CONFIG_STEP(config_ok, bq76952_setAlertPinConfig());
     BMS_BQ_CONFIG_STEP(config_ok, bq76952_setDFETOFFPinConfig(true, false));
-    BMS_BQ_CONFIG_STEP(config_ok, bq76952_setDCHGPinConfig(false));
-    BMS_BQ_CONFIG_STEP(config_ok, bq76952_setDDSGPinConfig(false));
+    // BMS_BQ_CONFIG_STEP(config_ok, bq76952_setDCHGPinConfig(false));
+    // BMS_BQ_CONFIG_STEP(config_ok, bq76952_setDDSGPinConfig(false));
     BMS_BQ_CONFIG_STEP(config_ok, bq76952_setDefaultAlarmMaskConfig());
     BMS_BQ_CONFIG_STEP(config_ok, bq76952_configureSleepWake());
     BMS_BQ_CONFIG_STEP(config_ok, bq76952_setSF_AlertMask_A());
@@ -409,9 +407,7 @@ static void BMS_ConfigureMonitor(void)
                                       50U));
     BMS_BQ_CONFIG_STEP(config_ok, bq76952_setDischargingShortcircuitProtection(SCD_60, 30U));
 
-    if (!bq76952_areFETs_Enabled()) {
-        bq76952_setFET_ENABLE();
-    }
+    bq76952_setFET_ENABLE();
     bq76952_setFET(ALL, ON);
     g_bms_tracking.faults.communicationFault = (config_ok == 0U);
     BMS_LOG_INFO("bq configured oc=%lu mV ok=%u",
@@ -426,14 +422,14 @@ static void BMS_ConfigureHardwarePins(void)
     HAL_GPIO_WritePin(BATS_EN_GPIO_Port, BATS_EN_Pin, GPIO_PIN_RESET);
     g_alert_irq_pending = false;
     g_alert_irq_counter = 0UL;
-    g_dchg_signal_active = (HAL_GPIO_ReadPin(DCHG_GPIO_Port, DCHG_Pin) == GPIO_PIN_SET);
-    g_ddsg_signal_active = (HAL_GPIO_ReadPin(DDSG_GPIO_Port, DDSG_Pin) == GPIO_PIN_SET);
+    // g_dchg_signal_active = (HAL_GPIO_ReadPin(DCHG_GPIO_Port, DCHG_Pin) == GPIO_PIN_SET);
+    // g_ddsg_signal_active = (HAL_GPIO_ReadPin(DDSG_GPIO_Port, DDSG_Pin) == GPIO_PIN_SET);
     g_shutdown_pulse_active = false;
     g_shutdown_pulse_tick = 0UL;
-    g_charge_oc_recovery_pending = false;
-    g_discharge_oc_recovery_pending = false;
-    g_charge_oc_recovery_tick = 0UL;
-    g_discharge_oc_recovery_tick = 0UL;
+    // g_charge_oc_recovery_pending = false;
+    // g_discharge_oc_recovery_pending = false;
+    // g_charge_oc_recovery_tick = 0UL;
+    // g_discharge_oc_recovery_tick = 0UL;
 }
 
 static void BMS_SetFetoff(bool asserted)
@@ -453,20 +449,21 @@ static void BMS_HandleHardwareSignals(BMS_Tracking_t *tracking, uint32_t now)
     bool should_service_alert;
     bool alert_signal_active;
     unsigned int alarm_status;
+    static uint32_t g_last_alert_service_tick = 0;
 
     if (tracking == NULL) {
         return;
     }
 
-    g_dchg_signal_active = (HAL_GPIO_ReadPin(DCHG_GPIO_Port, DCHG_Pin) == GPIO_PIN_SET);
-    g_ddsg_signal_active = (HAL_GPIO_ReadPin(DDSG_GPIO_Port, DDSG_Pin) == GPIO_PIN_SET);
+    // g_dchg_signal_active = (HAL_GPIO_ReadPin(DCHG_GPIO_Port, DCHG_Pin) == GPIO_PIN_SET);
+    // g_ddsg_signal_active = (HAL_GPIO_ReadPin(DDSG_GPIO_Port, DDSG_Pin) == GPIO_PIN_SET);
     alert_signal_active = BMS_IsAlertPinActive();
 
     /* DCHG/DDSG high means the corresponding BQ FET output is disabled.
      * It is a status/wakeup signal, not a standalone pack fault.
      */
-    tracking->chargeGateFaultSignal = g_dchg_signal_active;
-    tracking->dischargeGateFaultSignal = g_ddsg_signal_active;
+    // tracking->chargeGateFaultSignal = g_dchg_signal_active;
+    // tracking->dischargeGateFaultSignal = g_ddsg_signal_active;
 
     should_service_alert = g_alert_irq_pending ||
                            alert_signal_active ||
@@ -496,6 +493,7 @@ static void BMS_UpdateBatteryAdc(BMS_Tracking_t *tracking, uint32_t now)
     uint64_t pack_num;
     uint64_t pack_den;
     uint16_t batAdcRaw;
+    static uint32_t g_last_bat_adc_sample_tick = 0;
 
     if (tracking == NULL) {
         return;
@@ -558,9 +556,6 @@ static void BMS_ReadMeasurements(BMS_Tracking_t *tracking, uint32_t Now)
         }
     }
     
-
-
-
     tracking->stackVoltage = 0U;
     tracking->current_mA = (int32_t)bq76952_getCurrentAvg();
     tracking->temperature[0] = bq76952_getThermistorTemp(TS1);
@@ -662,6 +657,10 @@ static void BMS_UpdateBqAlarmRawStatus(BMS_Tracking_t *tracking)
 static void BMS_UpdateFaultFlags(BMS_Tracking_t *tracking, uint32_t now)
 {
     int32_t abs_current;
+    // static bool charge_oc_recovery_pending = false;
+    // static bool discharge_oc_recovery_pending = false;
+    static uint32_t g_charge_oc_recovery_tick = 0;
+    static uint32_t g_discharge_oc_recovery_tick = 0;
 
     if (tracking == NULL) {
         return;
@@ -716,41 +715,49 @@ static void BMS_UpdateFaultFlags(BMS_Tracking_t *tracking, uint32_t now)
     {
         if (tracking->currentDirection == BMS_CURRENT_CHARGE) {
             tracking->faults.chargeOverCurrent = true;
-            g_charge_oc_recovery_pending = false;
+            // charge_oc_recovery_pending = false;
+            g_charge_oc_recovery_tick = 0;
         }
     }
     if (abs_current >= BMS_OVER_CURRENT_DISCHARGE) {
         if (tracking->currentDirection == BMS_CURRENT_DISCHARGE) {
             tracking->faults.dischargeOverCurrent = true;
-            g_discharge_oc_recovery_pending = false;
+            // discharge_oc_recovery_pending = false;
+            g_discharge_oc_recovery_tick = 0; 
         }
     } else if (abs_current <= BMS_CURRENT_DEADBAND_MA) {
         if (tracking->faults.chargeOverCurrent) {
-            if (!g_charge_oc_recovery_pending) {
-                g_charge_oc_recovery_pending = true;
+            if (g_charge_oc_recovery_tick == 0) {
+                // charge_oc_recovery_pending = true;
                 g_charge_oc_recovery_tick = now;
             } else if ((now - g_charge_oc_recovery_tick) >= BMS_OVER_CURRENT_RECOVERY_DELAY_MS) {
                 tracking->faults.chargeOverCurrent = false;
-                g_charge_oc_recovery_pending = false;
+                g_charge_oc_recovery_tick = 0;
+                // charge_oc_recovery_pending = false;
         }
         } else {
-            g_charge_oc_recovery_pending = false;
+            // charge_oc_recovery_pending = false;
+            g_charge_oc_recovery_tick = 0;
         }
 
         if (tracking->faults.dischargeOverCurrent) {
-            if (!g_discharge_oc_recovery_pending) {
-                g_discharge_oc_recovery_pending = true;
+            if (g_discharge_oc_recovery_tick == 0) {
+                // discharge_oc_recovery_pending = true;
                 g_discharge_oc_recovery_tick = now;
             } else if ((now - g_discharge_oc_recovery_tick) >= BMS_OVER_CURRENT_RECOVERY_DELAY_MS) {
                 tracking->faults.dischargeOverCurrent = false;
-                g_discharge_oc_recovery_pending = false;
+                g_discharge_oc_recovery_tick = 0;
+                // discharge_oc_recovery_pending = false;
             }
         } else {
-            g_discharge_oc_recovery_pending = false;
+            // discharge_oc_recovery_pending = false;
+            g_discharge_oc_recovery_tick = 0;
         }
     } else {
-        g_charge_oc_recovery_pending = false;
-        g_discharge_oc_recovery_pending = false;
+        // charge_oc_recovery_pending = false;
+        // discharge_oc_recovery_pending = false;
+        g_charge_oc_recovery_tick = 0;
+        g_discharge_oc_recovery_tick = 0;
     }
 }
 
@@ -825,7 +832,6 @@ static void BMS_UpdateState(BMS_Tracking_t *tracking)
 
 static void BMS_ApplyFetPolicy(BMS_Tracking_t *tracking)
 {
-    static uint8_t state = 0;
     if (tracking == NULL) {
         return;
     }
@@ -836,7 +842,6 @@ static void BMS_ApplyFetPolicy(BMS_Tracking_t *tracking)
         HAL_Delay(BMS_FET_STATUS_SETTLE_MS);
         BMS_UpdateFetStatus(tracking);
         BMS_SyncStateWithFetAvailability(tracking);
-        state = 1;
         return;
     }
 
@@ -846,7 +851,6 @@ static void BMS_ApplyFetPolicy(BMS_Tracking_t *tracking)
         HAL_Delay(BMS_FET_STATUS_SETTLE_MS);
         BMS_UpdateFetStatus(tracking);
         BMS_SyncStateWithFetAvailability(tracking);
-        state = 1;
         return;
     }
 
@@ -856,7 +860,6 @@ static void BMS_ApplyFetPolicy(BMS_Tracking_t *tracking)
         HAL_Delay(BMS_FET_STATUS_SETTLE_MS);
         BMS_UpdateFetStatus(tracking);
         BMS_SyncStateWithFetAvailability(tracking);
-        state = 1;
         return;
     }
 
@@ -915,13 +918,7 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
     if (GPIO_Pin == ALERT_Pin) {
         BMS_NotifyAlertInterrupt();
         power_manager_notify_gpio_wakeup();
-    } else if (GPIO_Pin == DCHG_Pin) {
-        g_dchg_signal_active = (HAL_GPIO_ReadPin(DCHG_GPIO_Port, DCHG_Pin) == GPIO_PIN_SET);
-        power_manager_notify_gpio_wakeup();
-    } else if (GPIO_Pin == DDSG_Pin) {
-        g_ddsg_signal_active = (HAL_GPIO_ReadPin(DDSG_GPIO_Port, DDSG_Pin) == GPIO_PIN_SET);
-        power_manager_notify_gpio_wakeup();
-    }
+    } 
 }
 
 static void BMS_UpdateCoulombCounter(BMS_Tracking_t *tracking, uint32_t dt_ms)
@@ -941,22 +938,19 @@ static void BMS_UpdateCoulombCounter(BMS_Tracking_t *tracking, uint32_t dt_ms)
     sample_mAs = ((uint64_t)abs_current * (uint64_t)dt_ms) / 1000ULL;
     if (tracking->currentDirection == BMS_CURRENT_CHARGE) {
         tracking->chargeAccumulated_mAs += sample_mAs;
-    } else if (tracking->currentDirection == BMS_CURRENT_DISCHARGE) {
-        tracking->dischargeAccumulated_mAs += sample_mAs;
     }
 
     tracking->chargeThroughput_mAh = (uint32_t)(tracking->chargeAccumulated_mAs / 3600ULL);
-    tracking->dischargeThroughput_mAh = (uint32_t)(tracking->dischargeAccumulated_mAs / 3600ULL);
     tracking->equivalentCycle_milliCycles =
         (uint32_t)((tracking->chargeThroughput_mAh * 1000ULL) / BMS_NOMINAL_CAPACITY_MAH);
+        
 }
 
 static void BMS_UpdateBalancing(BMS_Tracking_t *tracking, uint32_t now)
 {
     static uint32_t g_last_balance_tick = 0;
     bool balance_allowed;
-    static uint16_t requested_mask = 0U;
-    uint16_t previous_mask = requested_mask;
+    static uint16_t previous_mask = 0;
     uint16_t selected_mask = 0U;
     uint16_t delta[BMS_NUMBER_OF_CELLS] = {0U};
     bool candidate[BMS_NUMBER_OF_CELLS] = {false};
@@ -977,10 +971,9 @@ static void BMS_UpdateBalancing(BMS_Tracking_t *tracking, uint32_t now)
                       tracking->balanceRequired &&
                       (tracking->currentDirection != BMS_CURRENT_DISCHARGE);
     if (!balance_allowed) {
-        if ((tracking->balanceMask != 0U) || (g_last_logged_balance_mask != 0U)) {
+        if ((tracking->balanceMask != 0U)) {
             bq76952_setCellBalanceMask(0U);
             BMS_LOG_INFO("balance off");
-            g_last_logged_balance_mask = 0U;
         }
         tracking->balanceMask = 0U;
         return;
@@ -992,7 +985,7 @@ static void BMS_UpdateBalancing(BMS_Tracking_t *tracking, uint32_t now)
     g_last_balance_tick = now;
 
     for (uint8_t i = 0U; i < BMS_NUMBER_OF_CELLS; ++i) {
-        bool was_selected = (previous_mask & (uint16_t)(1U << i)) != 0U;
+        // bool was_selected = (previous_mask & (uint16_t)(1U << i)) != 0U;
 
         if (tracking->cellVoltages.cellNum[i] >= tracking->cellVoltages.minCellVoltage) {
             delta[i] = tracking->cellVoltages.cellNum[i] - tracking->cellVoltages.minCellVoltage;
@@ -1002,11 +995,7 @@ static void BMS_UpdateBalancing(BMS_Tracking_t *tracking, uint32_t now)
             continue;
         }
 
-        if (was_selected) {
-            candidate[i] = delta[i] >= BMS_BALANCE_DELTA_MV_RECOVERY;
-        } else {
-            candidate[i] = delta[i] > BMS_BALANCE_DELTA_MV;
-        }
+        candidate[i] = delta[i] >= BMS_BALANCE_DELTA_MV_RECOVERY;
     }
 
     /* New cells enter above 30 mV; existing cells are held until below 20 mV. */
@@ -1055,12 +1044,8 @@ static void BMS_UpdateBalancing(BMS_Tracking_t *tracking, uint32_t now)
         candidate[best] = false;
     }
 
-    tracking->balanceMask = requested_mask;
-    bq76952_setCellBalanceMask(requested_mask);
-    if (requested_mask != g_last_logged_balance_mask) {
-        BMS_LOG_INFO("balance mask=0x%04x delta=%u", requested_mask, tracking->cellVoltages.deltaCellVoltage);
-        g_last_logged_balance_mask = requested_mask;
-    }
+    tracking->balanceMask = selected_mask;
+    bq76952_setCellBalanceMask(selected_mask);
 }
 
 static void BMS_LoadPersistedData(BMS_Tracking_t *tracking)
@@ -1077,19 +1062,14 @@ static void BMS_LoadPersistedData(BMS_Tracking_t *tracking)
     }
 
     tracking->chargeThroughput_mAh = record.chargeThroughput_mAh;   // Note: discharge throughput and equivalent cycle may be inconsistent with charge throughput, but it's acceptable for estimation purpose
-    tracking->dischargeThroughput_mAh = record.dischargeThroughput_mAh;
     tracking->equivalentCycle_milliCycles = record.equivalentCycle_milliCycles; // chu kì sạc xả
     tracking->currentCalibrationGainPpm = (record.currentCalibrationGainPpm == 0UL) ?
                                           BMS_CURRENT_CALIBRATION_DEFAULT_PPM :
                                           record.currentCalibrationGainPpm;
     tracking->chargeAccumulated_mAs = (uint64_t)record.chargeThroughput_mAh * 3600ULL; // tích trữ mAs dựa trên charge throughput đã lưu, vì discharge throughput có thể không chính xác nếu có lỗi ghi flash trước đó
-    tracking->dischargeAccumulated_mAs = (uint64_t)record.dischargeThroughput_mAh * 3600ULL;
-    g_last_saved_charge_mAh = tracking->chargeThroughput_mAh;
-    g_last_saved_discharge_mAh = tracking->dischargeThroughput_mAh;
 
-    BMS_LOG_INFO("flash load chg=%lu dch=%lu cyc=%lu cal=%lu",
+    BMS_LOG_INFO("flash load chg=%lu cyc=%lu cal=%lu",
                  (unsigned long)tracking->chargeThroughput_mAh,
-                 (unsigned long)tracking->dischargeThroughput_mAh,
                  (unsigned long)tracking->equivalentCycle_milliCycles,
                  (unsigned long)tracking->currentCalibrationGainPpm);
 }
@@ -1111,7 +1091,6 @@ static bool BMS_SaveCurrentCalibration(uint32_t gain_ppm)
     }
 
     record.chargeThroughput_mAh = g_bms_tracking.chargeThroughput_mAh;
-    record.dischargeThroughput_mAh = g_bms_tracking.dischargeThroughput_mAh;
     record.equivalentCycle_milliCycles = g_bms_tracking.equivalentCycle_milliCycles;
     record.nominalCapacity_mAh = BMS_NOMINAL_CAPACITY_MAH;
     record.currentCalibrationGainPpm = gain_ppm;
@@ -1122,9 +1101,6 @@ static bool BMS_SaveCurrentCalibration(uint32_t gain_ppm)
     }
 
     g_bms_tracking.currentCalibrationGainPpm = gain_ppm;
-    g_last_flash_save_tick = HAL_GetTick();
-    g_last_saved_charge_mAh = g_bms_tracking.chargeThroughput_mAh;
-    g_last_saved_discharge_mAh = g_bms_tracking.dischargeThroughput_mAh;
     return true;
 }
 
@@ -1133,7 +1109,8 @@ static void BMS_SavePersistedDataIfNeeded(const BMS_Tracking_t *tracking, uint32
     storage_flash_record_t record;
     storage_flash_record_t old_record;
     uint32_t charge_delta;
-    uint32_t discharge_delta;
+    static uint32_t g_last_flash_save_tick = 0;
+    static uint32_t g_last_saved_charge_mAh = 0;;
 
     if (tracking == NULL) {
         return;
@@ -1145,10 +1122,8 @@ static void BMS_SavePersistedDataIfNeeded(const BMS_Tracking_t *tracking, uint32
 
     charge_delta = (tracking->chargeThroughput_mAh >= g_last_saved_charge_mAh) ?
                    (tracking->chargeThroughput_mAh - g_last_saved_charge_mAh) : 0U;
-    discharge_delta = (tracking->dischargeThroughput_mAh >= g_last_saved_discharge_mAh) ?
-                      (tracking->dischargeThroughput_mAh - g_last_saved_discharge_mAh) : 0U;
-    if ((charge_delta < BMS_FLASH_SAVE_DELTA_MAH) &&
-        (discharge_delta < BMS_FLASH_SAVE_DELTA_MAH)) {
+
+    if ((charge_delta < BMS_FLASH_SAVE_DELTA_MAH)) {
         g_last_flash_save_tick = now;
         return;
     }
@@ -1160,7 +1135,6 @@ static void BMS_SavePersistedDataIfNeeded(const BMS_Tracking_t *tracking, uint32
         record.writeCounter = 1U;
     }
     record.chargeThroughput_mAh = tracking->chargeThroughput_mAh;
-    record.dischargeThroughput_mAh = tracking->dischargeThroughput_mAh;
     record.equivalentCycle_milliCycles = tracking->equivalentCycle_milliCycles;
     record.nominalCapacity_mAh = BMS_NOMINAL_CAPACITY_MAH;
     record.currentCalibrationGainPpm = (tracking->currentCalibrationGainPpm == 0UL) ?
@@ -1170,10 +1144,8 @@ static void BMS_SavePersistedDataIfNeeded(const BMS_Tracking_t *tracking, uint32
     if (storage_flash_save(&record)) {
         g_last_flash_save_tick = now;
         g_last_saved_charge_mAh = tracking->chargeThroughput_mAh;
-        g_last_saved_discharge_mAh = tracking->dischargeThroughput_mAh;
-        BMS_LOG_INFO("flash save chg=%lu dch=%lu cyc=%lu",
+        BMS_LOG_INFO("flash save chg=%lu cyc=%lu",
                      (unsigned long)record.chargeThroughput_mAh,
-                     (unsigned long)record.dischargeThroughput_mAh,
                      (unsigned long)record.equivalentCycle_milliCycles);
     } else {
         BMS_LOG_ERROR("flash save failed");

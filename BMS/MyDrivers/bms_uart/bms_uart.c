@@ -549,6 +549,7 @@ static void bms_uart_handle_calibrate_current(uint8_t command,
     BMS_CurrentCalibrationResult_t result;
     bms_uart_status_t status;
     int32_t actual_mA;
+    // BMS_CurrentCalibStatus_t status;
 
     if (length != 4U) {
         bms_uart_send_status(command, BMS_UART_STATUS_BAD_LENGTH);
@@ -560,22 +561,22 @@ static void bms_uart_handle_calibrate_current(uint8_t command,
     }
 
     actual_mA = bms_uart_get_i32(payload);
-    (void)BMS_CalibrateCurrent(actual_mA, &result);
+    status = (bms_uart_status_t)BMS_CalibrateCurrent(actual_mA, &result);
 
-    switch (result.status) {
-    case BMS_CURRENT_CALIBRATION_OK:
-        status = BMS_UART_STATUS_OK;
-        break;
-    case BMS_CURRENT_CALIBRATION_WRITE_FAILED:
-        status = BMS_UART_STATUS_INTERNAL_ERROR;
-        break;
-    case BMS_CURRENT_CALIBRATION_BAD_INPUT:
-    case BMS_CURRENT_CALIBRATION_ZERO_READING:
-    case BMS_CURRENT_CALIBRATION_DEVIATION_TOO_HIGH:
-    default:
-        status = BMS_UART_STATUS_BAD_PAYLOAD;
-        break;
-    }
+    // switch (result.status) {
+    // case BMS_CURRENT_CALIBRATION_OK:
+    //     status = BMS_UART_STATUS_OK;
+    //     break;
+    // case BMS_CURRENT_CALIBRATION_WRITE_FAILED:
+    //     status = BMS_UART_STATUS_INTERNAL_ERROR;
+    //     break;
+    // case BMS_CURRENT_CALIBRATION_BAD_INPUT:
+    // case BMS_CURRENT_CALIBRATION_ZERO_READING:
+    // case BMS_CURRENT_CALIBRATION_DEVIATION_TOO_HIGH:
+    // default:
+    //     status = BMS_UART_STATUS_BAD_PAYLOAD;
+    //     break;
+    // }
 
     bms_uart_send_current_calibration_result(command, status, &result);
 }
