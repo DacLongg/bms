@@ -35,12 +35,17 @@ extern "C" {
 extern UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN Private defines */
+#define USART2_RUN_BAUDRATE    115200U
+#define USART2_SLEEP_BAUDRATE  2400U
 
 /* USER CODE END Private defines */
 
 void MX_USART2_UART_Init(void);
 
 /* USER CODE BEGIN Prototypes */
+HAL_StatusTypeDef MX_USART2_UART_SetBaudRate(uint32_t baudrate);
+HAL_StatusTypeDef MX_USART2_UART_SetRunBaudRate(void);
+HAL_StatusTypeDef MX_USART2_UART_SetSleepBaudRate(void);
 
 /* USER CODE END Prototypes */
 

@@ -39,7 +39,7 @@ void MX_USART2_UART_Init(void)
 
   /* USER CODE END USART2_Init 1 */
   huart2.Instance = USART2;
-  huart2.Init.BaudRate = 115200;
+  huart2.Init.BaudRate = USART2_RUN_BAUDRATE;
   huart2.Init.WordLength = UART_WORDLENGTH_8B;
   huart2.Init.StopBits = UART_STOPBITS_1;
   huart2.Init.Parity = UART_PARITY_NONE;
@@ -117,5 +117,40 @@ void HAL_UART_MspDeInit(UART_HandleTypeDef* uartHandle)
 }
 
 /* USER CODE BEGIN 1 */
+
+HAL_StatusTypeDef MX_USART2_UART_SetBaudRate(uint32_t baudrate)
+{
+  HAL_StatusTypeDef status;
+
+  if ((huart2.Instance != USART2) || (baudrate == 0U))
+  {
+    return HAL_ERROR;
+  }
+
+  if (huart2.Init.BaudRate == baudrate)
+  {
+    return HAL_OK;
+  }
+
+  (void)HAL_UART_AbortReceive(&huart2);
+  huart2.Init.BaudRate = baudrate;
+  status = HAL_UART_Init(&huart2);
+  if (status != HAL_OK)
+  {
+    return status;
+  }
+
+  return HAL_OK;
+}
+
+HAL_StatusTypeDef MX_USART2_UART_SetRunBaudRate(void)
+{
+  return MX_USART2_UART_SetBaudRate(USART2_RUN_BAUDRATE);
+}
+
+HAL_StatusTypeDef MX_USART2_UART_SetSleepBaudRate(void)
+{
+  return MX_USART2_UART_SetBaudRate(USART2_SLEEP_BAUDRATE);
+}
 
 /* USER CODE END 1 */

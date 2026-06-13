@@ -111,6 +111,11 @@ void bms_uart_task(void)
     }
 }
 
+void bms_uart_restart_rx(void)
+{
+    bms_uart_start_rx();
+}
+
 bool bms_uart_is_enabled(void)
 {
     return true;
@@ -806,6 +811,10 @@ void bms_uart_init(UART_HandleTypeDef *uart)
 }
 
 void bms_uart_task(void)
+{
+}
+
+void bms_uart_restart_rx(void)
 {
 }
 

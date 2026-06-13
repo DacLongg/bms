@@ -1,6 +1,7 @@
 #include "power_manager.h"
 
 #include "adc.h"
+#include "bms_uart.h"
 #include "bms_uart_channel.h"
 
 extern ADC_HandleTypeDef hadc;
@@ -39,6 +40,8 @@ static uint32_t power_manager_msi_clock_hz(uint32_t msi_range);
 static void power_manager_disable_sleep_peripheral_clocks(void);
 static void power_manager_enable_sleep_peripheral_clocks(void);
 static HAL_StatusTypeDef power_manager_configure_rtc_wakeup(uint32_t auto_wakeup_ms);
+static HAL_StatusTypeDef power_manager_set_uart_sleep_baud(void);
+static HAL_StatusTypeDef power_manager_set_uart_run_baud(void);
 static void power_manager_wait_for_wakeup_source(void);
 static void power_manager_capture_debug_registers(void);
 static void power_manager_set_wakeup_source(power_manager_wakeup_source_t source);
@@ -239,6 +242,34 @@ static HAL_StatusTypeDef power_manager_configure_rtc_wakeup(uint32_t auto_wakeup
     return HAL_OK;
 }
 
+static HAL_StatusTypeDef power_manager_set_uart_sleep_baud(void)
+{
+#if BMS_UART_PROTOCOL_ENABLE
+    HAL_StatusTypeDef status = MX_USART2_UART_SetSleepBaudRate();
+
+    if (status == HAL_OK) {
+        bms_uart_restart_rx();
+    }
+    return status;
+#else
+    return HAL_OK;
+#endif
+}
+
+static HAL_StatusTypeDef power_manager_set_uart_run_baud(void)
+{
+#if BMS_UART_PROTOCOL_ENABLE
+    HAL_StatusTypeDef status = MX_USART2_UART_SetRunBaudRate();
+
+    if (status == HAL_OK) {
+        bms_uart_restart_rx();
+    }
+    return status;
+#else
+    return HAL_OK;
+#endif
+}
+
 static void power_manager_wait_for_wakeup_source(void)
 {
     HAL_PWR_DisableSleepOnExit();
@@ -293,12 +324,24 @@ HAL_StatusTypeDef power_manager_enter_low_power_sleep(uint32_t auto_wakeup_ms)
     }
 #endif
 
+    if (power_manager_set_uart_sleep_baud() != HAL_OK) {
+        g_power_manager_sleeping = false;
+        g_power_manager_debug_stage = POWER_MANAGER_DEBUG_STAGE_ERROR;
+#if POWER_MANAGER_LOW_POWER_SLEEP_CLOCK_ENABLE
+        (void)power_manager_restore_run_clock();
+#endif
+        (void)power_manager_set_uart_run_baud();
+        power_manager_enable_sleep_peripheral_clocks();
+        return HAL_ERROR;
+    }
+
     if (power_manager_configure_rtc_wakeup(auto_wakeup_ms) != HAL_OK) {
         g_power_manager_sleeping = false;
         g_power_manager_debug_stage = POWER_MANAGER_DEBUG_STAGE_ERROR;
 #if POWER_MANAGER_LOW_POWER_SLEEP_CLOCK_ENABLE
         (void)power_manager_restore_run_clock();
 #endif
+        (void)power_manager_set_uart_run_baud();
         power_manager_enable_sleep_peripheral_clocks();
         return HAL_ERROR;
     }
@@ -316,6 +359,12 @@ HAL_StatusTypeDef power_manager_enter_low_power_sleep(uint32_t auto_wakeup_ms)
         return HAL_ERROR;
     }
 #endif
+    if (power_manager_set_uart_run_baud() != HAL_OK) {
+        g_power_manager_debug_stage = POWER_MANAGER_DEBUG_STAGE_ERROR;
+        power_manager_enable_sleep_peripheral_clocks();
+        power_manager_exit_low_power_sleep_to_run();
+        return HAL_ERROR;
+    }
     g_power_manager_debug_stage = POWER_MANAGER_DEBUG_STAGE_ENABLE_PERIPHERALS;
     power_manager_enable_sleep_peripheral_clocks();
     g_power_manager_debug_stage = POWER_MANAGER_DEBUG_STAGE_EXIT;
