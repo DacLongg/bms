@@ -65,6 +65,7 @@
 #define BQ_OCC_THRESHOLD_MAX_CODE   62U
 #define BQ_OCD_THRESHOLD_MIN_CODE   2U
 #define BQ_OCD_THRESHOLD_MAX_CODE   100U
+#define BQ_USER_CURRENT_UNIT_MA     10L
 #define BQ_CB_CONFIG_CHARGE         0x01U
 #define BQ_CB_CONFIG_RELAX          0x02U
 #define BQ_CB_CONFIG_SLEEP          0x04U
@@ -146,6 +147,7 @@ static byte bq76952_makeReg12Control(bool enable_reg1, bool enable_reg2);
 static void bq76952_applyReg12Control(bool enable_reg1, bool enable_reg2);
 static byte bq76952_make_pin_config(byte pin_fxn, bool active_low);
 static byte bq76952_ocMvToThresholdCode(unsigned int mv, byte min_code, byte max_code);
+static int bq76952_userCurrentToMilliamp(int16_t current_userA);
 static uint32_t bq76952_scaleIeee754RawByPpm(uint32_t raw_value, uint32_t gain_ppm);
 static bool bq76952_writeU32DataMemory(unsigned int addr, uint32_t raw_value);
 static unsigned int bq76952_userVoltageCommandToMv(byte command);
@@ -323,6 +325,11 @@ static byte bq76952_ocMvToThresholdCode(unsigned int mv, byte min_code, byte max
         code = max_code;
     }
     return (byte)code;
+}
+
+static int bq76952_userCurrentToMilliamp(int16_t current_userA)
+{
+    return (int)((int32_t)current_userA * BQ_USER_CURRENT_UNIT_MA);
 }
 
 static uint32_t bq76952_scaleIeee754RawByPpm(uint32_t raw_value, uint32_t gain_ppm)
@@ -629,7 +636,7 @@ void bq76952_getOnlyConnectedCellVoltages(uint16_t *cellArray)
 
 int bq76952_getCurrent(void)
 {
-    return (int)(int16_t)bq76952_directCommand(CMD_DIR_CC2_CUR);
+    return bq76952_userCurrentToMilliamp((int16_t)bq76952_directCommand(CMD_DIR_CC2_CUR));
 }
 
 int bq76952_getCurrentNow(void)
@@ -642,7 +649,7 @@ int bq76952_getCurrentAvg(void)
     /* 0x0075 offset 20 là CC3 Current, tức dòng trung bình theo cấu hình CC3 Samples. */
     bq76952_subCommand(0x0075U);
     HAL_Delay(1U);
-    return bq76952_subCommandResponseInt(20U);
+    return bq76952_userCurrentToMilliamp(bq76952_subCommandResponseInt(20U));
 }
 
 unsigned int bq76952_getManufacturingStatus(void)
@@ -1267,7 +1274,7 @@ bool bq76952_setProtectionRecoveryTime(byte sec)
 
 bool bq76952_setDischargingOvercurrentProtection(unsigned int mv, byte ms)
 {
-    /* Ghi cùng ngưỡng cho OCD1 và OCD2, nhưng delay được ghi ở vùng OCD1 delay. */
+    /* Ghi cùng ngưỡng và delay cho cả OCD1/OCD2. */
     byte thresh = bq76952_ocMvToThresholdCode(mv,
                                               BQ_OCD_THRESHOLD_MIN_CODE,
                                               BQ_OCD_THRESHOLD_MAX_CODE);
@@ -1283,13 +1290,17 @@ bool bq76952_setDischargingOvercurrentProtection(unsigned int mv, byte ms)
     HAL_Delay(2U);
     status &= (uint8_t)bq76952_writeDataMemory(0x9284U, thresh, 1U);
     status &= (uint8_t)bq76952_writeDataMemory(0x9283U, dly, 1U);
+    status &= (uint8_t)bq76952_writeDataMemory(0x9285U, dly, 1U);
     return status != 0U;
 }
 
-bool bq76952_setDischargingOvercurrentProtection_OCD3(int16_t mA)
+bool bq76952_setDischargingOvercurrentProtection_OCD3(int16_t threshold_100mA)
 {
-    /* OCD3 dùng giá trị dòng theo đơn vị và dấu được BQ76952 định nghĩa trong data memory. */
-    return bq76952_writeDataMemory(0x928AU, mA, 2U);
+    uint8_t status = 1U;
+
+    status &= (uint8_t)bq76952_writeDataMemory(0x928AU, threshold_100mA, 2U);
+    status &= (uint8_t)bq76952_writeDataMemory(0x928CU, 1, 1U);
+    return status != 0U;
 }
 
 bool bq76952_setDischargingOvercurrentProtection_Recovery(int16_t mA)
@@ -1524,7 +1535,7 @@ bool bq76952_configureSleepWake(void)
 bool bq76952_setDA_Config(void)
 {
     /* USER_VOLTS_CV=1 để Stack/PACK/LD không tràn signed 16-bit trên pack 10S;
-     * USER_AMPS=1 giữ đơn vị dòng là mA.
+     * USER_AMPS=3 chọn 100 mA/userA để OCD3 biểu diễn được ngưỡng 75 A.
      */
     return bq76952_writeDataMemory(DA_CONFIGURATION, BQ_DA_CONFIG_DEFAULT, 1U);
 }
@@ -1664,8 +1675,8 @@ bool bq76952_setCellInterconnectResistances(void)
 
 bool bq76952_setDSGFETProtectionsA(void)
 {
-    /* 0xA4 là preset mapping fault -> DSG FET action của dự án. */
-    return bq76952_writeDataMemory(DSG_FET_PROTECTION_A, 0xA4, 1U);
+    /* CUV + OCD1 + OCD2 + SCD đều được phép cắt DSG FET. */
+    return bq76952_writeDataMemory(DSG_FET_PROTECTION_A, 0xE4, 1U);
 }
 
 bool bq76952_setDSGFETProtectionsB(void)

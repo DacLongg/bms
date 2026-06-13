@@ -181,8 +181,8 @@ typedef enum {
 #define BQ_REG1_VOLTAGE_CODE 0x06U
 #define BQ_REG2_VOLTAGE_CODE 0x07U
 #define BQ_DA_CONFIG_USER_VOLTS_CV 0x04U
-#define BQ_DA_CONFIG_USER_AMPS_MA 0x01U
-#define BQ_DA_CONFIG_DEFAULT (BQ_DA_CONFIG_USER_VOLTS_CV | BQ_DA_CONFIG_USER_AMPS_MA)
+#define BQ_DA_CONFIG_USER_AMPS_10MA 0x02U
+#define BQ_DA_CONFIG_DEFAULT (BQ_DA_CONFIG_USER_VOLTS_CV | BQ_DA_CONFIG_USER_AMPS_100MA)
 
 #define BQ_PIN_CONFIG_DCHG_ACTIVE_HIGH 0x2AU
 #define BQ_PIN_CONFIG_DDSG_ACTIVE_HIGH 0x2AU
@@ -594,8 +594,8 @@ bool bq76952_setChargingTemperatureMaxLimit(int temp, byte sec);
 bool bq76952_setChargingTemperatureMinLimit(int threshold, int recovery, byte sec);
 /* Cấu hình bảo vệ quá dòng khi xả, đầu vào theo mV trên shunt và ms. */
 bool bq76952_setDischargingOvercurrentProtection(unsigned int mv, byte ms);
-/* Cấu hình ngưỡng OCD3 recovery/trigger theo dòng mA quy đổi nội bộ của IC. */
-bool bq76952_setDischargingOvercurrentProtection_OCD3(int16_t mA);
+/* Cấu hình ngưỡng OCD3 theo mã signed 100 mA/LSB, delay đặt nhanh nhất. */
+bool bq76952_setDischargingOvercurrentProtection_OCD3(int16_t threshold_100mA);
 /* Cấu hình dòng phục hồi sau lỗi overcurrent discharge. */
 bool bq76952_setDischargingOvercurrentProtection_Recovery(int16_t mA);
 /* Cấu hình short-circuit discharge với mã ngưỡng enum và độ trễ micro giây. */
