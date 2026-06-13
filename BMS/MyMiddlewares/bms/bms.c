@@ -7,6 +7,7 @@
 #include <stddef.h>
 
 #include "debug_log.h"
+#include "bms_uart.h"
 #include "storage_flash.h"
 
 #define BMS_ALERT_POLL_FALLBACK_MS              1000U
@@ -31,7 +32,10 @@
 #define BMS_BAT_ADC_CAL_NUM                     955UL
 #define BMS_BAT_ADC_CAL_DEN                     1000UL
 
-#define BMS_BQ_CONFIG_STEP(ok_var, expr)        (ok_var) &= (uint8_t)(expr); \
+#define BMS_BQ_CONFIG_STEP(ok_var, expr)        ((ok_var) &= (uint8_t)(expr))
+#define BMS_CURRENT_TO_SENSE_MV(current_mA)     ((((uint32_t)(current_mA) * BMS_BQ_SENSE_RESISTOR_UOHM) + 999999UL) / 1000000UL)
+#define BMS_BQ_OC_COMPARATOR_MIN_MV             4UL
+#define BMS_CLAMP_BQ_OC_MV(mv)                  (((mv) < BMS_BQ_OC_COMPARATOR_MIN_MV) ? BMS_BQ_OC_COMPARATOR_MIN_MV : (mv))
 
 
 static BMS_Tracking_t g_bms_tracking;
@@ -120,6 +124,9 @@ void BMS_Update(void)
 
     g_bms_tracking.connected = bq76952_isConnected();
     if (!g_bms_tracking.connected) {
+        if (!g_bms_tracking.faults.communicationFault) {
+            bms_uart_send_protection_reason(BMS_UART_PROTECT_COMMUNICATION);
+        }
         g_bms_tracking.faults.communicationFault = true;
         BMS_LOG_ERROR("bq76952 communication fault");
         BMS_Error_Handler();
@@ -333,9 +340,11 @@ static void BMS_ConfigureMonitor(void)
 {
     uint32_t over_current_sense_mV;
     uint32_t over_current_chargr_mV;
+    int16_t discharge_ocd3_threshold_mA;
     uint8_t config_ok = 1U;
 
     BMS_LOG_INFO("configure bq76952");
+    BMS_BQ_CONFIG_STEP(config_ok, bq76952_Enter_FullAccessMode());
     BMS_BQ_CONFIG_STEP(config_ok, bq76952_configurePowerOutputs());
     BMS_BQ_CONFIG_STEP(config_ok, bq76952_setVcellMode(BMS_BQ_VCELL_MODE_10S));
     BMS_BQ_CONFIG_STEP(config_ok, bq76952_setDA_Config());
@@ -389,12 +398,17 @@ static void BMS_ConfigureMonitor(void)
                                       BMS_BALANCE_INTERVAL_SEC,
                                       BMS_BALANCE_MAX_ACTIVE_CELLS));
 
-
-    over_current_sense_mV = (((uint32_t)BMS_OVER_CURRENT_DISCHARGE * BMS_BQ_SENSE_RESISTOR_UOHM) + 500000UL) / 1000000UL;
-    over_current_chargr_mV = (((uint32_t)BMS_OVER_CURRENT_CHARGE * BMS_BQ_SENSE_RESISTOR_UOHM) + 500000UL) / 1000000UL;
-    if (over_current_sense_mV < 4UL) {
-        over_current_sense_mV = 4UL;
-    }
+    over_current_sense_mV = BMS_CLAMP_BQ_OC_MV(BMS_CURRENT_TO_SENSE_MV(BMS_OVER_CURRENT_DISCHARGE));
+    over_current_chargr_mV = BMS_CLAMP_BQ_OC_MV(BMS_CURRENT_TO_SENSE_MV(BMS_OVER_CURRENT_CHARGE));
+#if BMS_CURRENT_CHARGE_IS_POSITIVE
+    discharge_ocd3_threshold_mA = (BMS_OVER_CURRENT_DISCHARGE > 32767L) ?
+                                  -32767 :
+                                  (int16_t)(-BMS_OVER_CURRENT_DISCHARGE);
+#else
+    discharge_ocd3_threshold_mA = (BMS_OVER_CURRENT_DISCHARGE > 32767L) ?
+                                  32767 :
+                                  (int16_t)BMS_OVER_CURRENT_DISCHARGE;
+#endif
     BMS_BQ_CONFIG_STEP(config_ok, bq76952_setChargingOvercurrentProtection(
                                       (unsigned int)over_current_chargr_mV,
                                       50U));
@@ -405,13 +419,20 @@ static void BMS_ConfigureMonitor(void)
     BMS_BQ_CONFIG_STEP(config_ok, bq76952_setDischargingOvercurrentProtection(
                                       (unsigned int)over_current_sense_mV,
                                       50U));
+    BMS_BQ_CONFIG_STEP(config_ok, bq76952_setDischargingOvercurrentProtection_OCD3(
+                                      discharge_ocd3_threshold_mA));
+    BMS_BQ_CONFIG_STEP(config_ok, bq76952_setDischargingOvercurrentProtection_Recovery(0));
     BMS_BQ_CONFIG_STEP(config_ok, bq76952_setDischargingShortcircuitProtection(SCD_60, 30U));
 
-    bq76952_setFET_ENABLE();
+    if (!bq76952_areFETs_Enabled()) {
+        bq76952_setFET_ENABLE();
+    }
     bq76952_setFET(ALL, ON);
     g_bms_tracking.faults.communicationFault = (config_ok == 0U);
-    BMS_LOG_INFO("bq configured oc=%lu mV ok=%u",
+    BMS_LOG_INFO("bq configured occ=%lu mV ocd=%lu mV ocd3=%ld mA ok=%u",
+                 (unsigned long)over_current_chargr_mV,
                  (unsigned long)over_current_sense_mV,
+                 (long)discharge_ocd3_threshold_mA,
                  (unsigned int)config_ok);
 }
 
@@ -667,9 +688,15 @@ static void BMS_UpdateFaultFlags(BMS_Tracking_t *tracking, uint32_t now)
     }
 
     if (tracking->cellVoltages.averageCellVoltage >= BMS_CELL_OV_CUTOFF_MV_DEV) {
+        if (!tracking->faults.cellOverVoltage) {
+            bms_uart_send_protection_reason(BMS_UART_PROTECT_CELL_OV);
+        }
         tracking->faults.cellOverVoltage = true;
     }
     if (tracking->cellVoltages.averageCellVoltage <= BMS_CELL_UV_CUTOFF_MV_DEV) {
+        if (!tracking->faults.cellUnderVoltage) {
+            bms_uart_send_protection_reason(BMS_UART_PROTECT_CELL_UV);
+        }
         tracking->faults.cellUnderVoltage = true;
     }
 
@@ -684,12 +711,21 @@ static void BMS_UpdateFaultFlags(BMS_Tracking_t *tracking, uint32_t now)
 
     for (uint8_t i = 0U; i < BMS_NUMBER_OF_THERMISTORS; ++i) {
         if (tracking->temperature[i] >= BMS_CHARGE_OT_CUTOFF_C) {
+            if (!tracking->faults.chargeOverTemperature) {
+                bms_uart_send_protection_reason(BMS_UART_PROTECT_CHARGE_OT);
+            }
             tracking->faults.chargeOverTemperature = true;
         }
         if (tracking->temperature[i] >= BMS_DISCHARGE_OT_CUTOFF_C) {
+            if (!tracking->faults.dischargeOverTemperature) {
+                bms_uart_send_protection_reason(BMS_UART_PROTECT_DISCHARGE_OT);
+            }
             tracking->faults.dischargeOverTemperature = true;
         }
         if (tracking->temperature[i] <= BMS_UNDERTEMP_CUTOFF_C) {
+            if (!tracking->faults.underTemperature) {
+                bms_uart_send_protection_reason(BMS_UART_PROTECT_UNDERTEMP);
+            }
             tracking->faults.underTemperature = true;
         }
     }
@@ -709,11 +745,17 @@ static void BMS_UpdateFaultFlags(BMS_Tracking_t *tracking, uint32_t now)
 
     abs_current = BMS_AbsCurrent(tracking->current_mA);
     if (abs_current >= BMS_SHORT_CIRCUIT_MA) {
+        if (!tracking->faults.shortCircuit) {
+            bms_uart_send_protection_reason(BMS_UART_PROTECT_SHORT_CIRCUIT);
+        }
         tracking->faults.shortCircuit = true;
     }
     if(abs_current >= BMS_OVER_CURRENT_CHARGE)
     {
         if (tracking->currentDirection == BMS_CURRENT_CHARGE) {
+            if (!tracking->faults.chargeOverCurrent) {
+                bms_uart_send_protection_reason(BMS_UART_PROTECT_CHARGE_OC);
+            }
             tracking->faults.chargeOverCurrent = true;
             // charge_oc_recovery_pending = false;
             g_charge_oc_recovery_tick = 0;
@@ -721,7 +763,10 @@ static void BMS_UpdateFaultFlags(BMS_Tracking_t *tracking, uint32_t now)
     }
     if (abs_current >= BMS_OVER_CURRENT_DISCHARGE) {
         if (tracking->currentDirection == BMS_CURRENT_DISCHARGE) {
-            tracking->faults.dischargeOverCurrent = true;
+            if (!tracking->faults.dischargeOverCurrent) {
+                bms_uart_send_protection_reason(BMS_UART_PROTECT_DISCHARGE_OC);
+            }
+            // tracking->faults.dischargeOverCurrent = true;
             // discharge_oc_recovery_pending = false;
             g_discharge_oc_recovery_tick = 0; 
         }
@@ -764,6 +809,7 @@ static void BMS_UpdateFaultFlags(BMS_Tracking_t *tracking, uint32_t now)
 static void BMS_MergeBQFaultFlags(BMS_Tracking_t *tracking)
 {
     bq76952_protection_t protection;
+    BQ76952_SafetyStatusC_t safety_status_c;
     bq76952_temp_t temperature_status;
 
     if (tracking == NULL) {
@@ -771,19 +817,54 @@ static void BMS_MergeBQFaultFlags(BMS_Tracking_t *tracking)
     }
 
     protection = bq76952_getProtectionStatus();
+    safety_status_c = bq76952_getSafetyStatus_C();
     temperature_status = bq76952_getTemperatureStatus();
 
+    if (protection.bits.CELL_OV && !tracking->faults.cellOverVoltage) {
+        bms_uart_send_protection_reason(BMS_UART_PROTECT_CELL_OV);
+    }
     tracking->faults.cellOverVoltage = tracking->faults.cellOverVoltage || protection.bits.CELL_OV;
+
+    if (protection.bits.CELL_UV && !tracking->faults.cellUnderVoltage) {
+        bms_uart_send_protection_reason(BMS_UART_PROTECT_CELL_UV);
+    }
     tracking->faults.cellUnderVoltage = tracking->faults.cellUnderVoltage || protection.bits.CELL_UV;
+
+    if (protection.bits.OC_CHG && !tracking->faults.chargeOverCurrent) {
+        bms_uart_send_protection_reason(BMS_UART_PROTECT_CHARGE_OC);
+    }
     tracking->faults.chargeOverCurrent = tracking->faults.chargeOverCurrent || protection.bits.OC_CHG;
+
+    if ((protection.bits.OC1_DCHG || protection.bits.OC2_DCHG || safety_status_c.bit.OCD3) &&
+        !tracking->faults.dischargeOverCurrent) {
+        bms_uart_send_protection_reason(BMS_UART_PROTECT_DISCHARGE_OC);
+    }
     tracking->faults.dischargeOverCurrent = tracking->faults.dischargeOverCurrent ||
                                             protection.bits.OC1_DCHG ||
-                                            protection.bits.OC2_DCHG;
+                                            protection.bits.OC2_DCHG ||
+                                            safety_status_c.bit.OCD3;
+
+    if (protection.bits.SC_DCHG && !tracking->faults.shortCircuit) {
+        bms_uart_send_protection_reason(BMS_UART_PROTECT_SHORT_CIRCUIT);
+    }
     tracking->faults.shortCircuit = tracking->faults.shortCircuit || protection.bits.SC_DCHG;
+
+    if (temperature_status.bits.OVERTEMP_CHG && !tracking->faults.chargeOverTemperature) {
+        bms_uart_send_protection_reason(BMS_UART_PROTECT_CHARGE_OT);
+    }
     tracking->faults.chargeOverTemperature = tracking->faults.chargeOverTemperature ||
                                              temperature_status.bits.OVERTEMP_CHG;
+
+    if (temperature_status.bits.OVERTEMP_DCHG && !tracking->faults.dischargeOverTemperature) {
+        bms_uart_send_protection_reason(BMS_UART_PROTECT_DISCHARGE_OT);
+    }
     tracking->faults.dischargeOverTemperature = tracking->faults.dischargeOverTemperature ||
                                                 temperature_status.bits.OVERTEMP_DCHG;
+
+    if ((temperature_status.bits.UNDERTEMP_CHG || temperature_status.bits.UNDERTEMP_DCHG) &&
+        !tracking->faults.underTemperature) {
+        bms_uart_send_protection_reason(BMS_UART_PROTECT_UNDERTEMP);
+    }
     tracking->faults.underTemperature = tracking->faults.underTemperature ||
                                         temperature_status.bits.UNDERTEMP_CHG ||
                                         temperature_status.bits.UNDERTEMP_DCHG;

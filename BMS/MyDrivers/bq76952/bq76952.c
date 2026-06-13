@@ -18,6 +18,7 @@
 #define CMD_DIR_SAFETY_STATUS_A     0x03U
 #define CMD_DIR_SAFETY_STATUS_B     0x05U
 #define CMD_DIR_SAFETY_ALERT_C      0x06U
+#define CMD_DIR_SAFETY_STATUS_C     0x07U
 #define CMD_DIR_CONTROL_STATUS      0x00U
 #define CMD_DIR_BATTERY_STATUS      0x12U
 #define CMD_DIR_CC2_CUR             0x3AU
@@ -59,6 +60,11 @@
 #define BQ_IEEE754_MANT_MASK        0x007FFFFFUL
 #define BQ_IEEE754_MANT_HIDDEN_BIT  0x00800000UL
 #define BQ_IEEE754_MANT_OVERFLOW_BIT 0x01000000UL
+#define BQ_OC_THRESHOLD_STEP_MV     2U
+#define BQ_OCC_THRESHOLD_MIN_CODE   2U
+#define BQ_OCC_THRESHOLD_MAX_CODE   62U
+#define BQ_OCD_THRESHOLD_MIN_CODE   2U
+#define BQ_OCD_THRESHOLD_MAX_CODE   100U
 #define BQ_CB_CONFIG_CHARGE         0x01U
 #define BQ_CB_CONFIG_RELAX          0x02U
 #define BQ_CB_CONFIG_SLEEP          0x04U
@@ -139,6 +145,7 @@ static byte bq76952_calculateChecksum(const byte *data, uint16_t len);
 static byte bq76952_makeReg12Control(bool enable_reg1, bool enable_reg2);
 static void bq76952_applyReg12Control(bool enable_reg1, bool enable_reg2);
 static byte bq76952_make_pin_config(byte pin_fxn, bool active_low);
+static byte bq76952_ocMvToThresholdCode(unsigned int mv, byte min_code, byte max_code);
 static uint32_t bq76952_scaleIeee754RawByPpm(uint32_t raw_value, uint32_t gain_ppm);
 static bool bq76952_writeU32DataMemory(unsigned int addr, uint32_t raw_value);
 static unsigned int bq76952_userVoltageCommandToMv(byte command);
@@ -304,6 +311,18 @@ static byte bq76952_make_pin_config(byte pin_fxn, bool active_low)
         cfg |= 0x80U;
     }
     return cfg;
+}
+
+static byte bq76952_ocMvToThresholdCode(unsigned int mv, byte min_code, byte max_code)
+{
+    unsigned int code = (mv + (BQ_OC_THRESHOLD_STEP_MV - 1U)) / BQ_OC_THRESHOLD_STEP_MV;
+
+    if (code < min_code) {
+        code = min_code;
+    } else if (code > max_code) {
+        code = max_code;
+    }
+    return (byte)code;
 }
 
 static uint32_t bq76952_scaleIeee754RawByPpm(uint32_t raw_value, uint32_t gain_ppm)
@@ -1000,6 +1019,12 @@ bq76952_safety_alert_c_t bq76952_getSafetyAlert_C(void)
     return g_safety_alert_c;
 }
 
+BQ76952_SafetyStatusC_t bq76952_getSafetyStatus_C(void)
+{
+    BQ_RawInfo.statusC.all = (byte)bq76952_directCommand(CMD_DIR_SAFETY_STATUS_C);
+    return BQ_RawInfo.statusC;
+}
+
 bq76952_temp_t bq76952_getTemperatureStatus(void)
 {
     bq76952_temp_t status = {0};
@@ -1214,12 +1239,11 @@ bool bq76952_setShutdownStackVoltage(unsigned int voltage)
 bool bq76952_setChargingOvercurrentProtection(unsigned int mv, byte ms)
 {
     /* COC dùng bước 2 mV/LSB trên shunt; delay cũng dùng khoảng 3.3 ms/LSB. */
-    byte thresh = (byte)(mv / 2U);
+    byte thresh = bq76952_ocMvToThresholdCode(mv,
+                                              BQ_OCC_THRESHOLD_MIN_CODE,
+                                              BQ_OCC_THRESHOLD_MAX_CODE);
     byte dly = (byte)(((uint16_t)ms * 10U) / 33U) - 2U;
 
-    if (thresh < 2U || thresh > 62U) {
-        thresh = 2U;
-    }
     if (dly < 1U || dly > 127U) {
         dly = 4U;
     }
@@ -1244,12 +1268,11 @@ bool bq76952_setProtectionRecoveryTime(byte sec)
 bool bq76952_setDischargingOvercurrentProtection(unsigned int mv, byte ms)
 {
     /* Ghi cùng ngưỡng cho OCD1 và OCD2, nhưng delay được ghi ở vùng OCD1 delay. */
-    byte thresh = (byte)(mv / 2U);
+    byte thresh = bq76952_ocMvToThresholdCode(mv,
+                                              BQ_OCD_THRESHOLD_MIN_CODE,
+                                              BQ_OCD_THRESHOLD_MAX_CODE);
     byte dly = (byte)(((uint16_t)ms * 10U) / 33U) - 2U;
 
-    if (thresh < 2U || thresh > 100U) {
-        thresh = 2U;
-    }
     if (dly < 1U || dly > 127U) {
         dly = 1U;
     }

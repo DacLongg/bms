@@ -116,6 +116,11 @@ void bms_uart_restart_rx(void)
     bms_uart_start_rx();
 }
 
+void bms_uart_send_protection_reason(uint8_t reason)
+{
+    bms_uart_send_frame(BMS_UART_CMD_PROTECTION_EVENT, &reason, 1U);
+}
+
 bool bms_uart_is_enabled(void)
 {
     return true;
@@ -816,6 +821,11 @@ void bms_uart_task(void)
 
 void bms_uart_restart_rx(void)
 {
+}
+
+void bms_uart_send_protection_reason(uint8_t reason)
+{
+    (void)reason;
 }
 
 bool bms_uart_is_enabled(void)

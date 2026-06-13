@@ -23,7 +23,7 @@ SOF0 SOF1 CMD LEN PAYLOAD[LEN] CRC16_LO CRC16_HI
 ```
 
 - `CMD`: request command. Response command is `CMD | 0x80`.
-- `LEN`: payload length, max `64` bytes.
+- `LEN`: payload length, max `160` bytes.
 - `CRC16`: Modbus/IBM CRC16, init `0xFFFF`, polynomial `0xA001`, calculated over `CMD LEN PAYLOAD`.
 
 Every response payload starts with `STATUS`:
@@ -44,6 +44,10 @@ Status values:
 | `0x05` | Bad payload |
 
 ## Commands
+
+The firmware can also send asynchronous event frames. Event frames use the same
+frame format and CRC, but they are not responses and therefore their payload
+does not start with `STATUS`.
 
 ### `0x01` Ping
 
@@ -296,3 +300,28 @@ newGain_ppm:u32
 | `2` | BQ measured current is zero |
 | `3` | Difference is greater than 30% |
 | `4` | BQ or flash write failed |
+
+### Async `0x40` Protection Reason
+
+Sent automatically when firmware detects a new protection cause. This frame is
+not a response.
+
+Payload:
+
+```text
+reason:u8
+```
+
+Reason values:
+
+| Value | Reason |
+| --- | --- |
+| `0x01` | cellOverVoltage |
+| `0x02` | cellUnderVoltage |
+| `0x03` | chargeOverTemperature |
+| `0x04` | dischargeOverTemperature |
+| `0x05` | underTemperature |
+| `0x06` | chargeOverCurrent |
+| `0x07` | dischargeOverCurrent |
+| `0x08` | shortCircuit |
+| `0x09` | communicationFault |

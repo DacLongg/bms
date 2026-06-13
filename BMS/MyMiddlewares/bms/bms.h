@@ -29,7 +29,7 @@
 
 #define BMS_CURRENT_DEADBAND_MA                     300L
 #define BMS_OVER_CURRENT_CHARGE                     1000
-#define BMS_OVER_CURRENT_DISCHARGE                  75000L
+#define BMS_OVER_CURRENT_DISCHARGE                  2000L
 #define BMS_OVER_CURRENT_MA                         BMS_OVER_CURRENT_DISCHARGE
 #define BMS_OVER_CURRENT_RECOVERY_DELAY_MS          10000UL
 #define BMS_SHORT_CIRCUIT_MA                        120000L

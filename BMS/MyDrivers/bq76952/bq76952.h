@@ -535,6 +535,8 @@ int16_t bq76952_getThermistorTemp(bq76952_thermistor_t thermistor);
 bq76952_protection_t bq76952_getProtectionStatus(void);
 /* Đọc các cờ alert latched nhóm C. */
 bq76952_safety_alert_c_t bq76952_getSafetyAlert_C(void);
+/* Đọc các cờ bảo vệ đang active trong Safety Status C. */
+BQ76952_SafetyStatusC_t bq76952_getSafetyStatus_C(void);
 /* Đọc trạng thái bảo vệ nhiệt độ. */
 bq76952_temp_t bq76952_getTemperatureStatus(void);
 /* Điều khiển FET sạc/xả bằng subcommand của BQ76952. */
