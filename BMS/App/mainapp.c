@@ -206,14 +206,14 @@ void mainapp(void)
             bool alert_ready;
             bool bq_sleep_ready = false;
 
-            BMS_LOG_INFO("sleep enter bq_sleep=%u idle_ms=%lu",
-                         tracking->bqSleepMode ? 1U : 0U,
-                         (unsigned long)(now - last_activity_tick));
-            HAL_Delay(1000);
             alert_ready = MainApp_PrepareAlertWakeLine();
             if (alert_ready) {
                 bq_sleep_ready = bq76952_prepareSleepWithReg2();
             }
+            BMS_LOG_INFO("sleep enter alert=%u bq_sleep=%u idle_ms=%lu",
+                         alert_ready ? 1U : 0U,
+                         bq_sleep_ready ? 1U : 0U,
+                         (unsigned long)(now - last_activity_tick));
 
             if ((alert_ready == true) &&
                 (bq_sleep_ready == true))
@@ -242,10 +242,6 @@ void mainapp(void)
                     // allow_immediate_sleep = false;
                     last_activity_tick = now;
                     BMS_LOG_INFO("wake gpio");
-                } else if ((wake_source & POWER_MANAGER_WAKEUP_UART) != 0U) {
-                    // allow_immediate_sleep = false;
-                    last_activity_tick = now;
-                    BMS_LOG_INFO("wake uart");
                 } else if ((wake_source & POWER_MANAGER_WAKEUP_RTC) != 0U) {
                     // allow_immediate_sleep = true;
                     BMS_LOG_INFO("wake rtc");

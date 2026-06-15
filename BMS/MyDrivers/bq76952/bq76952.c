@@ -37,6 +37,12 @@
 #define BQ_POWER_CONFIG_DPSLP_PD    0x0800U
 #define BQ_POWER_CONFIG_DPSLP_LDO   0x0400U
 #define BQ_CONTROL_STATUS_DEEPSLEEP 0x0004U
+#ifndef BQ76952_SLEEP_KEEP_REG1_ENABLE
+#define BQ76952_SLEEP_KEEP_REG1_ENABLE 0
+#endif
+#ifndef BQ76952_SLEEP_KEEP_REG2_ENABLE
+#define BQ76952_SLEEP_KEEP_REG2_ENABLE 1
+#endif
 #define BQ_LOW_V_SHUTDOWN_DELAY     0x9243U
 #define BQ_SHUTDOWN_FET_OFF_DELAY   0x9252U
 #define BQ_SHUTDOWN_COMMAND_DELAY   0x9253U
@@ -300,6 +306,14 @@ static void bq76952_applyReg12Control(bool enable_reg1, bool enable_reg2)
                                  bq76952_makeReg12Control(enable_reg1, enable_reg2));
     HAL_Delay(1U);
 }
+
+#if BQ76952_LOW_POWER_MODE != BQ76952_LOW_POWER_MODE_SHUTDOWN
+static void bq76952_applySleepRegulatorControl(void)
+{
+    bq76952_applyReg12Control(BQ76952_SLEEP_KEEP_REG1_ENABLE != 0U,
+                              BQ76952_SLEEP_KEEP_REG2_ENABLE != 0U);
+}
+#endif
 
 static byte bq76952_make_pin_config(byte pin_fxn, bool active_low)
 {
@@ -1401,6 +1415,9 @@ bool bq76952_prepareSleepWithReg2(void)
             break;
         }
     }
+    if (batt_status.bits.SLEEP_MODE != 0U) {
+        bq76952_applySleepRegulatorControl();
+    }
     return batt_status.bits.SLEEP_MODE != 0U;
 }
 
@@ -1444,6 +1461,9 @@ bool bq76952_prepareSleepWithReg2(void)
         if ((control_status & BQ_CONTROL_STATUS_DEEPSLEEP) != 0U) {
             break;
         }
+    }
+    if ((control_status & BQ_CONTROL_STATUS_DEEPSLEEP) != 0U) {
+        bq76952_applySleepRegulatorControl();
     }
     return (control_status & BQ_CONTROL_STATUS_DEEPSLEEP) != 0U;
 }

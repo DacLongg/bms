@@ -1,8 +1,9 @@
 #include "power_manager.h"
-
+#include "debug_log.h"
 #include "adc.h"
 #include "bms_uart.h"
 #include "bms_uart_channel.h"
+#include "gpio.h"
 
 extern ADC_HandleTypeDef hadc;
 extern LPTIM_HandleTypeDef hlptim1;
@@ -10,13 +11,39 @@ extern RTC_HandleTypeDef hrtc;
 extern UART_HandleTypeDef huart2;
 
 #define POWER_MANAGER_RTC_WAKEUP_MAX_COUNTER 0xFFFFUL
-#define POWER_MANAGER_RCC_WAIT_LOOP_COUNT 1000000UL
+#define POWER_MANAGER_STOP_REGULATOR_MODE PWR_LOWPOWERREGULATOR_ON
+#define POWER_MANAGER_ALERT_ACTIVE_LEVEL GPIO_PIN_SET
+#define POWER_MANAGER_ALERT_EXTI_MASK ALERT_Pin
+#define POWER_MANAGER_NON_WAKE_EXTI_MASK (GPIO_PIN_0 | GPIO_PIN_1)
+#define POWER_MANAGER_GPIOA_SLEEP_KEEP_PINS (ALERT_Pin | FETOFF_Pin | POW_EN_Pin)
+#define POWER_MANAGER_GPIOB_SLEEP_KEEP_PINS (BATS_EN_Pin | SHUT_Pin)
 
-#if POWER_MANAGER_LOW_POWER_SLEEP_CLOCK_ENABLE
-#define POWER_MANAGER_SLEEP_REGULATOR_MODE PWR_LOWPOWERREGULATOR_ON
-#else
-#define POWER_MANAGER_SLEEP_REGULATOR_MODE PWR_MAINREGULATOR_ON
-#endif
+typedef struct {
+    uint32_t moder;
+    uint32_t otyper;
+    uint32_t ospeedr;
+    uint32_t pupdr;
+    uint32_t odr;
+    uint32_t afr[2];
+} power_manager_gpio_context_t;
+
+typedef struct {
+    power_manager_gpio_context_t gpioa;
+    power_manager_gpio_context_t gpiob;
+    power_manager_gpio_context_t gpioh;
+    uint32_t rcc_iopenr;
+    uint32_t rcc_iopsmenr;
+    uint32_t rcc_ahbsmenr;
+    uint32_t rcc_apb1smenr;
+    uint32_t rcc_apb2smenr;
+    uint32_t exti_imr;
+    uint32_t exti_emr;
+    uint32_t exti_rtsr;
+    uint32_t exti_ftsr;
+    uint32_t syscfg_exticr[4];
+    uint8_t exti0_1_irq_enabled;
+    uint8_t exti2_3_irq_enabled;
+} power_manager_stop_context_t;
 
 static volatile bool g_power_manager_sleeping;
 static volatile power_manager_wakeup_source_t g_power_manager_wakeup_source = POWER_MANAGER_WAKEUP_NONE;
@@ -28,20 +55,29 @@ static volatile uint32_t g_power_manager_debug_scr;
 static volatile uint32_t g_power_manager_debug_rtc_isr;
 static volatile uint32_t g_power_manager_debug_rtc_cr;
 static volatile uint32_t g_power_manager_debug_exti_pr;
+static power_manager_stop_context_t g_power_manager_stop_context;
 
-#if POWER_MANAGER_LOW_POWER_SLEEP_CLOCK_ENABLE
-static HAL_StatusTypeDef power_manager_config_low_power_sleep_clock(void);
+extern void SystemClock_Config(void);
+
 static HAL_StatusTypeDef power_manager_restore_run_clock(void);
-static HAL_StatusTypeDef power_manager_wait_rcc_flag(uint32_t flag, FlagStatus state);
-static HAL_StatusTypeDef power_manager_wait_sysclk_source(uint32_t source);
 static HAL_StatusTypeDef power_manager_reconfigure_systick(void);
-static uint32_t power_manager_msi_clock_hz(uint32_t msi_range);
-#endif
+static void power_manager_save_stop_context(void);
+static void power_manager_restore_stop_context(void);
+static void power_manager_save_gpio_context(GPIO_TypeDef *port,
+                                            power_manager_gpio_context_t *context);
+static void power_manager_restore_gpio_context(GPIO_TypeDef *port,
+                                               const power_manager_gpio_context_t *context);
 static void power_manager_disable_sleep_peripheral_clocks(void);
 static void power_manager_enable_sleep_peripheral_clocks(void);
+static HAL_StatusTypeDef power_manager_suspend_run_peripherals(void);
+static HAL_StatusTypeDef power_manager_resume_run_peripherals(void);
+static void power_manager_configure_stop_gpio(void);
+static void power_manager_configure_sleep_output(GPIO_TypeDef *port, uint16_t pin, GPIO_PinState level);
+static void power_manager_configure_sleep_analog(GPIO_TypeDef *port, uint16_t pins);
+static void power_manager_configure_alert_wakeup_pin(void);
+static void power_manager_prepare_stop_power(void);
+static bool power_manager_is_alert_pin_active(void);
 static HAL_StatusTypeDef power_manager_configure_rtc_wakeup(uint32_t auto_wakeup_ms);
-static HAL_StatusTypeDef power_manager_set_uart_sleep_baud(void);
-static HAL_StatusTypeDef power_manager_set_uart_run_baud(void);
 static void power_manager_wait_for_wakeup_source(void);
 static void power_manager_capture_debug_registers(void);
 static void power_manager_set_wakeup_source(power_manager_wakeup_source_t source);
@@ -60,112 +96,11 @@ static uint32_t power_manager_rtc_wakeup_counter_from_ms(uint32_t timeout_ms)
     return counter;
 }
 
-#if POWER_MANAGER_LOW_POWER_SLEEP_CLOCK_ENABLE
-static HAL_StatusTypeDef power_manager_config_low_power_sleep_clock(void)
-{
-    __HAL_RCC_MSI_ENABLE();
-    if (power_manager_wait_rcc_flag(RCC_FLAG_MSIRDY, SET) != HAL_OK) {
-        return HAL_TIMEOUT;
-    }
-
-    __HAL_RCC_MSI_RANGE_CONFIG(POWER_MANAGER_LOW_POWER_SLEEP_MSI_RANGE);
-    MODIFY_REG(RCC->CFGR, RCC_CFGR_HPRE, RCC_SYSCLK_DIV1);
-    MODIFY_REG(RCC->CFGR, RCC_CFGR_PPRE1, RCC_HCLK_DIV1);
-    MODIFY_REG(RCC->CFGR, RCC_CFGR_PPRE2, (RCC_HCLK_DIV1 << 3U));
-    __HAL_RCC_SYSCLK_CONFIG(RCC_SYSCLKSOURCE_MSI);
-    if (power_manager_wait_sysclk_source(RCC_SYSCLKSOURCE_STATUS_MSI) != HAL_OK) {
-        return HAL_TIMEOUT;
-    }
-
-    __HAL_FLASH_SET_LATENCY(FLASH_LATENCY_0);
-    if (__HAL_FLASH_GET_LATENCY() != FLASH_LATENCY_0) {
-        return HAL_ERROR;
-    }
-
-    __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE3);
-
-    __HAL_RCC_PLL_DISABLE();
-    if (power_manager_wait_rcc_flag(RCC_FLAG_PLLRDY, RESET) != HAL_OK) {
-        return HAL_TIMEOUT;
-    }
-
-    __HAL_RCC_HSI_DISABLE();
-    if (power_manager_wait_rcc_flag(RCC_FLAG_HSIRDY, RESET) != HAL_OK) {
-        return HAL_TIMEOUT;
-    }
-
-    SystemCoreClock = power_manager_msi_clock_hz(POWER_MANAGER_LOW_POWER_SLEEP_MSI_RANGE);
-    return power_manager_reconfigure_systick();
-}
-
 static HAL_StatusTypeDef power_manager_restore_run_clock(void)
 {
-    __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
-
-    __HAL_RCC_HSI_ENABLE();
-    if (power_manager_wait_rcc_flag(RCC_FLAG_HSIRDY, SET) != HAL_OK) {
-        return HAL_TIMEOUT;
-    }
-
-    __HAL_RCC_PLL_DISABLE();
-    if (power_manager_wait_rcc_flag(RCC_FLAG_PLLRDY, RESET) != HAL_OK) {
-        return HAL_TIMEOUT;
-    }
-
-    __HAL_RCC_PLL_CONFIG(RCC_PLLSOURCE_HSI, RCC_PLLMUL_4, RCC_PLLDIV_2);
-    __HAL_FLASH_SET_LATENCY(FLASH_LATENCY_1);
-    if (__HAL_FLASH_GET_LATENCY() != FLASH_LATENCY_1) {
-        return HAL_ERROR;
-    }
-
-    __HAL_RCC_PLL_ENABLE();
-    if (power_manager_wait_rcc_flag(RCC_FLAG_PLLRDY, SET) != HAL_OK) {
-        return HAL_TIMEOUT;
-    }
-
-    MODIFY_REG(RCC->CFGR, RCC_CFGR_HPRE, RCC_SYSCLK_DIV1);
-    MODIFY_REG(RCC->CFGR, RCC_CFGR_PPRE1, RCC_HCLK_DIV1);
-    MODIFY_REG(RCC->CFGR, RCC_CFGR_PPRE2, (RCC_HCLK_DIV1 << 3U));
-    __HAL_RCC_SYSCLK_CONFIG(RCC_SYSCLKSOURCE_PLLCLK);
-    if (power_manager_wait_sysclk_source(RCC_SYSCLKSOURCE_STATUS_PLLCLK) != HAL_OK) {
-        return HAL_TIMEOUT;
-    }
-
-    SystemCoreClock = HAL_RCC_GetSysClockFreq();
-    if (power_manager_reconfigure_systick() != HAL_OK) {
-        return HAL_ERROR;
-    }
-
-    if (__HAL_RCC_GET_SYSCLK_SOURCE() != RCC_SYSCLKSOURCE_STATUS_MSI) {
-        __HAL_RCC_MSI_DISABLE();
-    }
-    return HAL_OK;
-}
-
-static HAL_StatusTypeDef power_manager_wait_rcc_flag(uint32_t flag, FlagStatus state)
-{
-    uint32_t timeout = POWER_MANAGER_RCC_WAIT_LOOP_COUNT;
-
-    while (__HAL_RCC_GET_FLAG(flag) != state) {
-        if (timeout == 0U) {
-            return HAL_TIMEOUT;
-        }
-        timeout--;
-    }
-    return HAL_OK;
-}
-
-static HAL_StatusTypeDef power_manager_wait_sysclk_source(uint32_t source)
-{
-    uint32_t timeout = POWER_MANAGER_RCC_WAIT_LOOP_COUNT;
-
-    while (__HAL_RCC_GET_SYSCLK_SOURCE() != source) {
-        if (timeout == 0U) {
-            return HAL_TIMEOUT;
-        }
-        timeout--;
-    }
-    return HAL_OK;
+    SystemClock_Config();
+    SystemCoreClockUpdate();
+    return power_manager_reconfigure_systick();
 }
 
 static HAL_StatusTypeDef power_manager_reconfigure_systick(void)
@@ -184,33 +119,234 @@ static HAL_StatusTypeDef power_manager_reconfigure_systick(void)
     return HAL_OK;
 }
 
-static uint32_t power_manager_msi_clock_hz(uint32_t msi_range)
-{
-    return 32768UL * (1UL << (((msi_range & RCC_ICSCR_MSIRANGE) >> RCC_ICSCR_MSIRANGE_Pos) + 1UL));
-}
-#endif
-
 static void power_manager_disable_sleep_peripheral_clocks(void)
 {
-    if ((hadc.Instance->CR & ADC_CR_ADEN) != 0U) {
-        __HAL_ADC_DISABLE(&hadc);
-    }
-    __HAL_RCC_ADC1_CLK_DISABLE();
-    __HAL_RCC_LPTIM1_CLK_DISABLE();
-
-#if !BMS_UART_PROTOCOL_ENABLE
-    __HAL_RCC_USART2_CLK_DISABLE();
-#endif
+    RCC->IOPSMENR = 0U;
+    RCC->AHBSMENR = RCC_AHBSMENR_SRAMSMEN;
+    RCC->APB1SMENR = RCC_APB1SMENR_PWRSMEN;
+    RCC->APB2SMENR = 0U;
 }
 
 static void power_manager_enable_sleep_peripheral_clocks(void)
 {
-    __HAL_RCC_ADC1_CLK_ENABLE();
-    __HAL_RCC_LPTIM1_CLK_ENABLE();
+    RCC->IOPSMENR = g_power_manager_stop_context.rcc_iopsmenr;
+    RCC->AHBSMENR = g_power_manager_stop_context.rcc_ahbsmenr;
+    RCC->APB1SMENR = g_power_manager_stop_context.rcc_apb1smenr;
+    RCC->APB2SMENR = g_power_manager_stop_context.rcc_apb2smenr;
+}
 
-#if !BMS_UART_PROTOCOL_ENABLE
-    __HAL_RCC_USART2_CLK_ENABLE();
+static void power_manager_save_stop_context(void)
+{
+    g_power_manager_stop_context.rcc_iopenr = RCC->IOPENR;
+    g_power_manager_stop_context.rcc_iopsmenr = RCC->IOPSMENR;
+    g_power_manager_stop_context.rcc_ahbsmenr = RCC->AHBSMENR;
+    g_power_manager_stop_context.rcc_apb1smenr = RCC->APB1SMENR;
+    g_power_manager_stop_context.rcc_apb2smenr = RCC->APB2SMENR;
+
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+    __HAL_RCC_GPIOB_CLK_ENABLE();
+    __HAL_RCC_GPIOH_CLK_ENABLE();
+
+    power_manager_save_gpio_context(GPIOA, &g_power_manager_stop_context.gpioa);
+    power_manager_save_gpio_context(GPIOB, &g_power_manager_stop_context.gpiob);
+    power_manager_save_gpio_context(GPIOH, &g_power_manager_stop_context.gpioh);
+
+    g_power_manager_stop_context.exti_imr = EXTI->IMR;
+    g_power_manager_stop_context.exti_emr = EXTI->EMR;
+    g_power_manager_stop_context.exti_rtsr = EXTI->RTSR;
+    g_power_manager_stop_context.exti_ftsr = EXTI->FTSR;
+    for (uint8_t i = 0U; i < 4U; ++i) {
+        g_power_manager_stop_context.syscfg_exticr[i] = SYSCFG->EXTICR[i];
+    }
+
+    g_power_manager_stop_context.exti0_1_irq_enabled =
+        (uint8_t)(NVIC_GetEnableIRQ(EXTI0_1_IRQn) != 0U);
+    g_power_manager_stop_context.exti2_3_irq_enabled =
+        (uint8_t)(NVIC_GetEnableIRQ(EXTI2_3_IRQn) != 0U);
+}
+
+static void power_manager_restore_stop_context(void)
+{
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+    __HAL_RCC_GPIOB_CLK_ENABLE();
+    __HAL_RCC_GPIOH_CLK_ENABLE();
+
+    power_manager_restore_gpio_context(GPIOA, &g_power_manager_stop_context.gpioa);
+    power_manager_restore_gpio_context(GPIOB, &g_power_manager_stop_context.gpiob);
+    power_manager_restore_gpio_context(GPIOH, &g_power_manager_stop_context.gpioh);
+
+    EXTI->IMR = g_power_manager_stop_context.exti_imr;
+    EXTI->EMR = g_power_manager_stop_context.exti_emr;
+    EXTI->RTSR = g_power_manager_stop_context.exti_rtsr;
+    EXTI->FTSR = g_power_manager_stop_context.exti_ftsr;
+    for (uint8_t i = 0U; i < 4U; ++i) {
+        SYSCFG->EXTICR[i] = g_power_manager_stop_context.syscfg_exticr[i];
+    }
+
+    RCC->IOPENR = g_power_manager_stop_context.rcc_iopenr;
+
+    if (g_power_manager_stop_context.exti0_1_irq_enabled != 0U) {
+        HAL_NVIC_EnableIRQ(EXTI0_1_IRQn);
+    }
+    if (g_power_manager_stop_context.exti2_3_irq_enabled != 0U) {
+        HAL_NVIC_EnableIRQ(EXTI2_3_IRQn);
+    }
+}
+
+static void power_manager_save_gpio_context(GPIO_TypeDef *port,
+                                            power_manager_gpio_context_t *context)
+{
+    context->moder = port->MODER;
+    context->otyper = port->OTYPER;
+    context->ospeedr = port->OSPEEDR;
+    context->pupdr = port->PUPDR;
+    context->odr = port->ODR;
+    context->afr[0] = port->AFR[0];
+    context->afr[1] = port->AFR[1];
+}
+
+static void power_manager_restore_gpio_context(GPIO_TypeDef *port,
+                                               const power_manager_gpio_context_t *context)
+{
+    port->MODER = context->moder;
+    port->OTYPER = context->otyper;
+    port->OSPEEDR = context->ospeedr;
+    port->PUPDR = context->pupdr;
+    port->ODR = context->odr;
+    port->AFR[0] = context->afr[0];
+    port->AFR[1] = context->afr[1];
+}
+
+static HAL_StatusTypeDef power_manager_suspend_run_peripherals(void)
+{
+    HAL_StatusTypeDef status = HAL_OK;
+
+    (void)HAL_ADC_Stop(&hadc);
+    if (HAL_ADC_DeInit(&hadc) != HAL_OK) {
+        status = HAL_ERROR;
+    }
+
+    if (HAL_LPTIM_DeInit(&hlptim1) != HAL_OK) {
+        status = HAL_ERROR;
+    }
+
+    (void)HAL_UART_Abort(&huart2);
+    if (HAL_UART_DeInit(&huart2) != HAL_OK) {
+        status = HAL_ERROR;
+    }
+
+    HAL_NVIC_DisableIRQ(USART2_IRQn);
+    HAL_NVIC_DisableIRQ(LPTIM1_IRQn);
+    HAL_NVIC_ClearPendingIRQ(USART2_IRQn);
+    HAL_NVIC_ClearPendingIRQ(LPTIM1_IRQn);
+    return status;
+}
+
+static HAL_StatusTypeDef power_manager_resume_run_peripherals(void)
+{
+    MX_ADC_Init();
+    MX_LPTIM1_Init();
+    MX_USART2_UART_Init();
+
+#if BMS_UART_PROTOCOL_ENABLE
+    bms_uart_restart_rx();
 #endif
+    return HAL_OK;
+}
+
+static void power_manager_configure_stop_gpio(void)
+{
+    HAL_NVIC_DisableIRQ(EXTI0_1_IRQn);
+    HAL_NVIC_ClearPendingIRQ(EXTI0_1_IRQn);
+    __HAL_GPIO_EXTI_CLEAR_IT(GPIO_PIN_0);
+    __HAL_GPIO_EXTI_CLEAR_IT(GPIO_PIN_1);
+    HAL_NVIC_DisableIRQ(EXTI2_3_IRQn);
+    HAL_NVIC_ClearPendingIRQ(EXTI2_3_IRQn);
+    __HAL_GPIO_EXTI_CLEAR_IT(ALERT_Pin);
+
+    power_manager_configure_sleep_output(FETOFF_GPIO_Port, FETOFF_Pin, GPIO_PIN_RESET);
+    power_manager_configure_sleep_output(POW_EN_GPIO_Port, POW_EN_Pin, GPIO_PIN_RESET);
+    power_manager_configure_sleep_output(BATS_EN_GPIO_Port, BATS_EN_Pin, GPIO_PIN_RESET);
+    power_manager_configure_sleep_output(SHUT_GPIO_Port, SHUT_Pin, GPIO_PIN_RESET);
+
+    power_manager_configure_sleep_analog(GPIOA,
+                                         (uint16_t)(GPIO_PIN_All &
+                                                    (uint16_t)~POWER_MANAGER_GPIOA_SLEEP_KEEP_PINS));
+    power_manager_configure_sleep_analog(GPIOB,
+                                         (uint16_t)(GPIO_PIN_All &
+                                                    (uint16_t)~POWER_MANAGER_GPIOB_SLEEP_KEEP_PINS));
+    power_manager_configure_sleep_analog(GPIOH, GPIO_PIN_All);
+    power_manager_configure_alert_wakeup_pin();
+
+    CLEAR_BIT(EXTI->IMR, POWER_MANAGER_NON_WAKE_EXTI_MASK);
+    CLEAR_BIT(EXTI->EMR, POWER_MANAGER_NON_WAKE_EXTI_MASK);
+    CLEAR_BIT(EXTI->FTSR, (POWER_MANAGER_NON_WAKE_EXTI_MASK | POWER_MANAGER_ALERT_EXTI_MASK));
+    SET_BIT(EXTI->RTSR, POWER_MANAGER_ALERT_EXTI_MASK);
+    SET_BIT(EXTI->IMR, POWER_MANAGER_ALERT_EXTI_MASK);
+
+    __HAL_GPIO_EXTI_CLEAR_IT(ALERT_Pin);
+    HAL_NVIC_ClearPendingIRQ(EXTI2_3_IRQn);
+    HAL_NVIC_EnableIRQ(EXTI2_3_IRQn);
+
+    if (power_manager_is_alert_pin_active()) {
+        power_manager_set_wakeup_source(POWER_MANAGER_WAKEUP_GPIO);
+    }
+
+    __HAL_RCC_GPIOA_CLK_DISABLE();
+    __HAL_RCC_GPIOB_CLK_DISABLE();
+    __HAL_RCC_GPIOH_CLK_DISABLE();
+}
+
+static void power_manager_configure_sleep_output(GPIO_TypeDef *port, uint16_t pin, GPIO_PinState level)
+{
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+    HAL_GPIO_WritePin(port, pin, level);
+    GPIO_InitStruct.Pin = pin;
+    GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(port, &GPIO_InitStruct);
+}
+
+static void power_manager_configure_sleep_analog(GPIO_TypeDef *port, uint16_t pins)
+{
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+    if (pins == 0U) {
+        return;
+    }
+    GPIO_InitStruct.Pin = pins;
+    GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    HAL_GPIO_Init(port, &GPIO_InitStruct);
+}
+
+static void power_manager_configure_alert_wakeup_pin(void)
+{
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+    GPIO_InitStruct.Pin = ALERT_Pin;
+    GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING_FALLING;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    HAL_GPIO_Init(ALERT_GPIO_Port, &GPIO_InitStruct);
+}
+
+static void power_manager_prepare_stop_power(void)
+{
+#if defined(PWR_PVD_SUPPORT)
+    HAL_PWR_DisablePVD();
+#endif
+    HAL_PWREx_EnableUltraLowPower();
+    HAL_PWREx_DisableFastWakeUp();
+    HAL_DBGMCU_DisableDBGSleepMode();
+    HAL_DBGMCU_DisableDBGStopMode();
+    HAL_DBGMCU_DisableDBGStandbyMode();
+}
+
+static bool power_manager_is_alert_pin_active(void)
+{
+    return HAL_GPIO_ReadPin(ALERT_GPIO_Port, ALERT_Pin) == POWER_MANAGER_ALERT_ACTIVE_LEVEL;
 }
 
 static HAL_StatusTypeDef power_manager_configure_rtc_wakeup(uint32_t auto_wakeup_ms)
@@ -242,34 +378,6 @@ static HAL_StatusTypeDef power_manager_configure_rtc_wakeup(uint32_t auto_wakeup
     return HAL_OK;
 }
 
-static HAL_StatusTypeDef power_manager_set_uart_sleep_baud(void)
-{
-#if BMS_UART_PROTOCOL_ENABLE
-    HAL_StatusTypeDef status = MX_USART2_UART_SetSleepBaudRate();
-
-    if (status == HAL_OK) {
-        bms_uart_restart_rx();
-    }
-    return status;
-#else
-    return HAL_OK;
-#endif
-}
-
-static HAL_StatusTypeDef power_manager_set_uart_run_baud(void)
-{
-#if BMS_UART_PROTOCOL_ENABLE
-    HAL_StatusTypeDef status = MX_USART2_UART_SetRunBaudRate();
-
-    if (status == HAL_OK) {
-        bms_uart_restart_rx();
-    }
-    return status;
-#else
-    return HAL_OK;
-#endif
-}
-
 static void power_manager_wait_for_wakeup_source(void)
 {
     HAL_PWR_DisableSleepOnExit();
@@ -279,9 +387,10 @@ static void power_manager_wait_for_wakeup_source(void)
         g_power_manager_debug_stage = POWER_MANAGER_DEBUG_STAGE_WFI_ENTER;
         g_power_manager_wfi_enter_count++;
         power_manager_capture_debug_registers();
+        __HAL_PWR_CLEAR_FLAG(PWR_FLAG_WU);
         __DSB();
         __ISB();
-        HAL_PWR_EnterSLEEPMode(POWER_MANAGER_SLEEP_REGULATOR_MODE, PWR_SLEEPENTRY_WFI);
+        HAL_PWR_EnterSTOPMode(POWER_MANAGER_STOP_REGULATOR_MODE, PWR_STOPENTRY_WFI);
         g_power_manager_wfi_exit_count++;
         g_power_manager_debug_stage = POWER_MANAGER_DEBUG_STAGE_WFI_EXIT;
         power_manager_capture_debug_registers();
@@ -309,64 +418,68 @@ static void power_manager_set_wakeup_source(power_manager_wakeup_source_t source
 
 HAL_StatusTypeDef power_manager_enter_low_power_sleep(uint32_t auto_wakeup_ms)
 {
+    HAL_StatusTypeDef status = HAL_OK;
+
     g_power_manager_wakeup_source = POWER_MANAGER_WAKEUP_NONE;
     g_power_manager_sleeping = true;
 
+    power_manager_save_stop_context();
     power_manager_disable_sleep_peripheral_clocks();
-#if POWER_MANAGER_LOW_POWER_SLEEP_CLOCK_ENABLE
-    g_power_manager_debug_stage = POWER_MANAGER_DEBUG_STAGE_SLEEP_CLOCK;
-    if (power_manager_config_low_power_sleep_clock() != HAL_OK) {
-        g_power_manager_sleeping = false;
-        g_power_manager_debug_stage = POWER_MANAGER_DEBUG_STAGE_ERROR;
-        (void)power_manager_restore_run_clock();
-        power_manager_enable_sleep_peripheral_clocks();
-        return HAL_ERROR;
-    }
-#endif
 
-    if (power_manager_set_uart_sleep_baud() != HAL_OK) {
-        g_power_manager_sleeping = false;
-        g_power_manager_debug_stage = POWER_MANAGER_DEBUG_STAGE_ERROR;
-#if POWER_MANAGER_LOW_POWER_SLEEP_CLOCK_ENABLE
-        (void)power_manager_restore_run_clock();
-#endif
-        (void)power_manager_set_uart_run_baud();
-        power_manager_enable_sleep_peripheral_clocks();
-        return HAL_ERROR;
+    if (power_manager_suspend_run_peripherals() != HAL_OK) {
+        BMS_LOG_ERROR("power_manager_suspend_run_peripherals failed");
+        status = HAL_ERROR;
     }
 
-    if (power_manager_configure_rtc_wakeup(auto_wakeup_ms) != HAL_OK) {
-        g_power_manager_sleeping = false;
-        g_power_manager_debug_stage = POWER_MANAGER_DEBUG_STAGE_ERROR;
-#if POWER_MANAGER_LOW_POWER_SLEEP_CLOCK_ENABLE
-        (void)power_manager_restore_run_clock();
-#endif
-        (void)power_manager_set_uart_run_baud();
-        power_manager_enable_sleep_peripheral_clocks();
-        return HAL_ERROR;
+    if ((status == HAL_OK) &&
+        (power_manager_configure_rtc_wakeup(auto_wakeup_ms) != HAL_OK)) {
+            BMS_LOG_ERROR("power_manager_configure_rtc_wakeup failed");
+        status = HAL_ERROR;
     }
 
-    __HAL_FLASH_SLEEP_POWERDOWN_ENABLE();
-    power_manager_wait_for_wakeup_source();
+    if (status == HAL_OK) {
+        power_manager_configure_stop_gpio();
+        power_manager_prepare_stop_power();
+    }
+
+    if (status == HAL_OK) {
+        __HAL_FLASH_SLEEP_POWERDOWN_ENABLE();
+        power_manager_wait_for_wakeup_source();
+    }
+
     __HAL_FLASH_SLEEP_POWERDOWN_DISABLE();
     g_power_manager_sleeping = false;
-#if POWER_MANAGER_LOW_POWER_SLEEP_CLOCK_ENABLE
+
     g_power_manager_debug_stage = POWER_MANAGER_DEBUG_STAGE_RESTORE_CLOCK;
-    if (power_manager_restore_run_clock() != HAL_OK) {
+    if ((status == HAL_OK) && (power_manager_restore_run_clock() != HAL_OK)) {
         g_power_manager_debug_stage = POWER_MANAGER_DEBUG_STAGE_ERROR;
         power_manager_enable_sleep_peripheral_clocks();
+        power_manager_restore_stop_context();
+        (void)power_manager_resume_run_peripherals();
         power_manager_exit_low_power_sleep_to_run();
+        BMS_LOG_ERROR("power_manager_restore_run_clock failed");
         return HAL_ERROR;
     }
-#endif
-    if (power_manager_set_uart_run_baud() != HAL_OK) {
-        g_power_manager_debug_stage = POWER_MANAGER_DEBUG_STAGE_ERROR;
-        power_manager_enable_sleep_peripheral_clocks();
-        power_manager_exit_low_power_sleep_to_run();
-        return HAL_ERROR;
-    }
-    g_power_manager_debug_stage = POWER_MANAGER_DEBUG_STAGE_ENABLE_PERIPHERALS;
+
     power_manager_enable_sleep_peripheral_clocks();
+    power_manager_restore_stop_context();
+
+    if (power_manager_resume_run_peripherals() != HAL_OK) {
+        g_power_manager_debug_stage = POWER_MANAGER_DEBUG_STAGE_ERROR;
+        power_manager_exit_low_power_sleep_to_run();
+        BMS_LOG_ERROR("power_manager_resume_run_peripherals failed");
+        return HAL_ERROR;
+    }
+
+    if (status != HAL_OK) {
+        g_power_manager_debug_stage = POWER_MANAGER_DEBUG_STAGE_ERROR;
+        BMS_LOG_ERROR("g_power_manager_debug_stage failed");
+
+        power_manager_exit_low_power_sleep_to_run();
+        return HAL_ERROR;
+    }
+
+    g_power_manager_debug_stage = POWER_MANAGER_DEBUG_STAGE_ENABLE_PERIPHERALS;
     g_power_manager_debug_stage = POWER_MANAGER_DEBUG_STAGE_EXIT;
     power_manager_exit_low_power_sleep_to_run();
 
@@ -400,12 +513,32 @@ bool power_manager_is_sleeping(void)
 
 void power_manager_notify_gpio_wakeup(void)
 {
+    // bool gpioa_clock_enabled;
+
+    // if (!g_power_manager_sleeping) {
+    //     return;
+    // }
+
+    // gpioa_clock_enabled = __HAL_RCC_GPIOA_IS_CLK_ENABLED();
+    // if (!gpioa_clock_enabled) {
+    //     __HAL_RCC_GPIOA_CLK_ENABLE();
+    // }
+    // if (!power_manager_is_alert_pin_active()) {
+    //     if (!gpioa_clock_enabled) {
+    //         __HAL_RCC_GPIOA_CLK_DISABLE();
+    //     }
+    //     return;
+    // }
+    // if (!gpioa_clock_enabled) {
+    //     __HAL_RCC_GPIOA_CLK_DISABLE();
+    // }
+
     power_manager_set_wakeup_source(POWER_MANAGER_WAKEUP_GPIO);
 }
 
 void power_manager_notify_uart_wakeup(void)
 {
-    power_manager_set_wakeup_source(POWER_MANAGER_WAKEUP_UART);
+    /* UART is intentionally not a STOP wake source in the optimized sleep path. */
 }
 
 power_manager_wakeup_source_t power_manager_get_and_clear_wakeup_source(void)
