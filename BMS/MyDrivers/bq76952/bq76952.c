@@ -138,6 +138,17 @@ static uint16_t g_full_access_key_step_1;
 static uint16_t g_full_access_key_step_2;
 static bq76952_write_verify_t g_last_write_verify;
 
+/*
+ * Mapping 10S theo reference TI khi dung BQ76952:
+ * Cell logic 1..9  -> BQ Cell 1..9 (VC1-VC0 ... VC9-VC8).
+ * Cell logic 10    -> BQ Cell 16 (VC16-VC15).
+ * Phan cung phai noi tat VC10=VC9, VC11=VC10, ... VC15=VC14.
+ * Moi gia tri ben duoi la chi so zero-based cua thanh ghi Cell Voltage/bit CB.
+ */
+static const byte g_logical_cell_to_bq_cell_index[BQ76952_CONNECTED_CELL_COUNT] = {
+    0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 15U
+};
+
 BQ76952_RawInfo_t BQ_RawInfo;
 
 // static bool bq76952_write_register(byte reg, const byte *data, uint16_t len);
@@ -642,10 +653,21 @@ void bq76952_getOnlyConnectedCellVoltages(uint16_t *cellArray)
         return;
     }
 
-    bq76952_getAllCellVoltages(cellArray, 10U);
-    // for (byte cell = 0U; cell < 10U; ++cell) {
-    //     cellArray[cell] = allcells[cell];
-    // }
+    for (byte cell = 0U; cell < BQ76952_CONNECTED_CELL_COUNT; ++cell) {
+        int cell_voltage = bq76952_getCellVoltage(g_logical_cell_to_bq_cell_index[cell]);
+        cellArray[cell] = (cell_voltage < 0) ? 0U : (uint16_t)cell_voltage;
+    }
+}
+
+uint16_t bq76952_getConnectedCellMask(void)
+{
+    uint16_t mask = 0U;
+
+    for (byte cell = 0U; cell < BQ76952_CONNECTED_CELL_COUNT; ++cell) {
+        mask |= (uint16_t)(1U << g_logical_cell_to_bq_cell_index[cell]);
+    }
+
+    return mask;
 }
 
 int bq76952_getCurrent(void)
@@ -923,6 +945,7 @@ bool bq76952_program_OTP_with_status(bq76952_otp_status_t *status)
 {
     bq76952_otp_status_t local_status;
     bq76952_otp_status_t *result = (status != NULL) ? status : &local_status;
+    bool blocked_during_check = false;
     bool allow_write = false;
 
     *result = (bq76952_otp_status_t){0};
@@ -947,8 +970,9 @@ bool bq76952_program_OTP_with_status(bq76952_otp_status_t *status)
         result->checkResult = (uint8_t)bq76952_subCommandResponseInt(0U);
         result->checkDataFailAddr = (uint16_t)bq76952_subCommandResponseInt(1U);
         battery_status_raw = (uint16_t)bq76952_getBatteryStatusRaw();
+        blocked_during_check = BQ_READ_STATUS_BIT(battery_status_raw, 7U) != 0U;
         allow_write = bq76952_otpResultIsOk(result->checkResult) &&
-                      (BQ_READ_STATUS_BIT(battery_status_raw, 7U) == 0U);
+                      !blocked_during_check;
 
         if (allow_write) {
             bq76952_subCommand(SUBCMD_OTP_WRITE);
@@ -961,6 +985,7 @@ bool bq76952_program_OTP_with_status(bq76952_otp_status_t *status)
     bq76952_exitConfigUpdate();
     (void)bq76952_waitConfigUpdateMode(false, BQ_CONFIG_UPDATE_TIMEOUT_MS);
     bq76952_fillOTPStatusSnapshot(result);
+    result->otpBlocked = result->otpBlocked || blocked_during_check;
 
     result->checkOk = result->configUpdateOk &&
                       bq76952_otpResultIsOk(result->checkResult) &&
@@ -1169,9 +1194,9 @@ void bq76952_setCellBalanceMask(uint16_t logical_cell_mask)
 {
     uint16_t bq_vc_mask = 0U;
 
-    for (byte cell = 0U; cell < 10U; ++cell) {
+    for (byte cell = 0U; cell < BQ76952_CONNECTED_CELL_COUNT; ++cell) {
         if ((logical_cell_mask & (uint16_t)(1U << cell)) != 0U) {
-            bq_vc_mask |= (uint16_t)(1U << cell);
+            bq_vc_mask |= (uint16_t)(1U << g_logical_cell_to_bq_cell_index[cell]);
         }
     }
 

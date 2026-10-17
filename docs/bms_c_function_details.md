@@ -77,7 +77,7 @@ Tài liệu này mô tả cách hoạt động của tất cả hàm trong file 
 ## 7. `static void BMS_ConfigureMonitor(void)`
 - Mục đích: Cấu hình toàn bộ IC BQ76952 theo ngưỡng của project.
 - Thiết lập chính:
-- Chế độ đọc cell 10S (`BMS_BQ_VCELL_MODE_10S`).
+- Chế độ đọc cell 10S thưa (`Vcell Mode = 0xAAAF`) được tạo từ cùng bảng mapping dùng cho đọc điện áp và cân bằng cell.
 - Bật các nhóm bảo vệ A/B/C và cấu hình FET/protection.
 - Cấu hình OV/UV theo:
 - `BMS_CELL_OV_CUTOFF_MV` (4150mV), delay `BMS_BQ_PROTECTION_DELAY_MS`.

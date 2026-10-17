@@ -353,7 +353,8 @@ static void BMS_ConfigureMonitor(void)
     BMS_LOG_INFO("configure bq76952");
     BMS_BQ_CONFIG_STEP(config_ok, bq76952_Enter_FullAccessMode());
     BMS_BQ_CONFIG_STEP(config_ok, bq76952_configurePowerOutputs());
-    BMS_BQ_CONFIG_STEP(config_ok, bq76952_setVcellMode(BMS_BQ_VCELL_MODE_10S));
+    bq76952_setShutdownStackVoltage(0);
+    BMS_BQ_CONFIG_STEP(config_ok, bq76952_setVcellMode(bq76952_getConnectedCellMask()));
     BMS_BQ_CONFIG_STEP(config_ok, bq76952_setDA_Config());
     BMS_BQ_CONFIG_STEP(config_ok, bq76952_setCurrentSenseCalibration(
                                   g_bms_tracking.currentCalibrationGainPpm));

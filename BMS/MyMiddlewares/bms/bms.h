@@ -6,7 +6,7 @@
 
 #include "bq76952.h"
 
-#define BMS_NUMBER_OF_CELLS                         10U
+#define BMS_NUMBER_OF_CELLS                         BQ76952_CONNECTED_CELL_COUNT
 #define BMS_NUMBER_OF_THERMISTORS                   2U
 
 #define BMS_CELL_TIMES_ACUMMULATE                   10
@@ -45,8 +45,6 @@
 #define BMS_UNDERTEMP_RECOVER_C                     5
 #define BMS_BQ_TEMPERATURE_PROTECTION_DELAY_SEC     2U
 
-/* Hardware 10S uses consecutive BQ cell channels VC0..VC10. */
-#define BMS_BQ_VCELL_MODE_10S                       0x03FFU
 #define BMS_BQ_SENSE_RESISTOR_UOHM                  500UL
 #define BMS_BQ_PROTECTION_DELAY_MS                  3000U
 #define BMS_CURRENT_CHARGE_IS_POSITIVE              1

@@ -14,6 +14,9 @@ extern "C" {
 /* Địa chỉ I2C 7-bit của BQ76952 khi giao tiếp ở chế độ chuẩn. */
 #define BQ_I2C_ADDR                 0x08U
 
+/* Pack 10S tren revision phan cung hien tai dung 10 kenh Cell cua BQ76952. */
+#define BQ76952_CONNECTED_CELL_COUNT 10U
+
 #define BQ76952_LOW_POWER_MODE_SLEEP     1U
 #define BQ76952_LOW_POWER_MODE_DEEPSLEEP 2U
 #define BQ76952_LOW_POWER_MODE_SHUTDOWN  3U
@@ -511,6 +514,8 @@ int bq76952_getCellVoltage(byte cellNumber);
 void bq76952_getAllCellVoltages(uint16_t *cellArray, uint8_t numCells);
 /* Đọc các cell thực sự đang được nối trên pack theo mapping phần cứng hiện tại. */
 void bq76952_getOnlyConnectedCellVoltages(uint16_t *cellArray);
+/* Trả về bitmask Cell1..Cell16 dùng chung cho Vcell Mode và mapping phần cứng. */
+uint16_t bq76952_getConnectedCellMask(void);
 /* Đọc dòng tức thời từ thanh ghi CC2 Current, dấu phụ thuộc chiều shunt. */
 int bq76952_getCurrent(void);
 /* Đọc dòng tức thời thông qua subcommand DA status snapshot. */

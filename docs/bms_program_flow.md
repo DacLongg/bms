@@ -48,7 +48,7 @@ Truoc khi vao vong `mainapp()`, `main.c` khoi tao USART2 va goi `debug_log_init(
 
 Cac cau hinh chinh:
 
-- Cell mapping 10S: `BMS_BQ_VCELL_MODE_10S = 0x03FF` cho cac kenh VC0..VC9 lien tiep.
+- Cell mapping 10S: driver tao `Vcell Mode = 0xAAAF` tu cung bang mapping dung de doc dien ap va can bang cell.
 - Enable protection group A/B/C cua BQ.
 - Cau hinh FET options, predischarge timeout va stop delta.
 - Cau hinh DCHG pin va DDSG pin thanh output chuc nang BQ voi gia tri `0x2A` (PIN_FXN=2, active-high, high drive tu REG1).
@@ -95,20 +95,20 @@ Moi lan `BMS_Update()` chay theo thu tu co dinh:
 
 Mapping cell theo mach:
 
-| Cell logic | BQ VC input |
-| --- | --- |
-| Cell 1 | VC0 |
-| Cell 2 | VC1 |
-| Cell 3 | VC2 |
-| Cell 4 | VC3 |
-| Cell 5 | VC5 |
-| Cell 6 | VC7 |
-| Cell 7 | VC9 |
-| Cell 8 | VC11 |
-| Cell 9 | VC13 |
-| Cell 10 | VC15 |
+| Cell logic | BQ cell/bit | Cap chan sense |
+| --- | --- | --- |
+| Cell 1 | Cell 1 / bit 0 | VC1-VC0 |
+| Cell 2 | Cell 2 / bit 1 | VC2-VC1 |
+| Cell 3 | Cell 3 / bit 2 | VC3-VC2 |
+| Cell 4 | Cell 4 / bit 3 | VC4-VC3 |
+| Cell 5 | Cell 6 / bit 5 | VC6-VC5 |
+| Cell 6 | Cell 8 / bit 7 | VC8-VC7 |
+| Cell 7 | Cell 10 / bit 9 | VC10-VC9 |
+| Cell 8 | Cell 12 / bit 11 | VC12-VC11 |
+| Cell 9 | Cell 14 / bit 13 | VC14-VC13 |
+| Cell 10 | Cell 16 / bit 15 | VC16-VC15 |
 
-Mapping nay duoc driver BQ dung khi doc cell va khi doi `balanceMask` logic thanh mask VC cua BQ.
+Mapping nay duoc driver BQ dung khi tao `Vcell Mode`, doc cell va doi `balanceMask` logic thanh mask Cell cua BQ. Cac cap `VC5-VC4`, `VC7-VC6`, `VC9-VC8`, `VC11-VC10`, `VC13-VC12`, `VC15-VC14` la kenh bo qua va phai duoc noi tat theo schematic.
 
 ## 6. Cell And Pack Statistics
 

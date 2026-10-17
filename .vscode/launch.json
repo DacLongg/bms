@@ -38,6 +38,7 @@
         "objdumpPath": "C:/ProgramData/chocolatey/bin/arm-none-eabi-objdump.exe",
         "serverpath": "C:/ProgramData/chocolatey/bin/openocd.exe"
       }
+      
     }
   ]
 }
