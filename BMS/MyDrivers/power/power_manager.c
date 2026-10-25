@@ -4,6 +4,7 @@
 #include "bms_uart.h"
 #include "bms_uart_channel.h"
 #include "gpio.h"
+#include "watchdog.h"
 
 extern ADC_HandleTypeDef hadc;
 extern LPTIM_HandleTypeDef hlptim1;
@@ -383,6 +384,7 @@ static void power_manager_wait_for_wakeup_source(void)
     HAL_PWR_DisableSleepOnExit();
     while (g_power_manager_wakeup_source == POWER_MANAGER_WAKEUP_NONE) {
         HAL_SuspendTick();
+        watchdog_refresh_for_stop_transition();
         HAL_PWR_DisableSleepOnExit();
         g_power_manager_debug_stage = POWER_MANAGER_DEBUG_STAGE_WFI_ENTER;
         g_power_manager_wfi_enter_count++;
@@ -391,6 +393,7 @@ static void power_manager_wait_for_wakeup_source(void)
         __DSB();
         __ISB();
         HAL_PWR_EnterSTOPMode(POWER_MANAGER_STOP_REGULATOR_MODE, PWR_STOPENTRY_WFI);
+        watchdog_refresh_for_stop_transition();
         g_power_manager_wfi_exit_count++;
         g_power_manager_debug_stage = POWER_MANAGER_DEBUG_STAGE_WFI_EXIT;
         power_manager_capture_debug_registers();

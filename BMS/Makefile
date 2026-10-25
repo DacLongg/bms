@@ -48,6 +48,7 @@ Core/Src/stm32l0xx_hal_msp.c \
 App/mainapp.c \
 MyMiddlewares/bms/bms.c \
 MyDrivers/power/power_manager.c \
+MyDrivers/power/watchdog.c \
 MyDrivers/bq76952/bq76952.c \
 MyDrivers/i2c_soft/i2c_soft.c \
 MyDrivers/bms_uart/bms_uart.c \

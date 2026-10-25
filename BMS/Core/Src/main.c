@@ -29,6 +29,7 @@
 #include "App/mainapp.h"
 #include "bms_uart.h"
 #include "debug_log.h"
+#include "watchdog.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -97,11 +98,15 @@ int main(void)
   MX_RTC_Init();
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
+  watchdog_init();
 #if BMS_UART_PROTOCOL_ENABLE
   bms_uart_init(&huart2);
 #else
   debug_log_init(&huart2);
   BMS_LOG_INFO("boot");
+  if (watchdog_was_reset()) {
+    BMS_LOG_WARN("previous reset: WWDG");
+  }
 #endif
 
   /* USER CODE END 2 */
@@ -114,6 +119,7 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
     mainapp();
+    watchdog_note_main_progress();
   }
   /* USER CODE END 3 */
 }
