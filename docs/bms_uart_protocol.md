@@ -1,5 +1,7 @@
 # BMS UART Protocol
 
+> **Lưu ý:** Tài liệu này mô tả một phiên bản cũ và không còn khớp hoàn toàn với source. Bản dùng để tích hợp/gửi đối tác: [BMS_UART_Protocol_For_Partner.md](BMS_UART_Protocol_For_Partner.md); bản đối chiếu firmware chi tiết: [bms_uart_protocol_from_source.md](bms_uart_protocol_from_source.md). Đặc biệt, build mặc định hiện bật protocol và `READ_SUMMARY` gửi raw struct, không gửi các trường tuần tự hóa như bảng bên dưới.
+
 USART2 is shared between debug log and the external BMS protocol.
 
 Build modes:

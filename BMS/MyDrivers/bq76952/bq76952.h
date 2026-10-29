@@ -17,31 +17,6 @@ extern "C" {
 /* Pack 10S tren revision phan cung hien tai dung 10 kenh Cell cua BQ76952. */
 #define BQ76952_CONNECTED_CELL_COUNT 10U
 
-#define BQ76952_LOW_POWER_MODE_SLEEP     1U
-#define BQ76952_LOW_POWER_MODE_DEEPSLEEP 2U
-#define BQ76952_LOW_POWER_MODE_SHUTDOWN  3U
-#define BQ76952_LOW_POWER_MODE_DEFAULT   BQ76952_LOW_POWER_MODE_DEEPSLEEP
-
-/* Change only BQ76952_LOW_POWER_MODE_DEFAULT to select the BQ low-power mechanism. */
-#ifndef BQ76952_LOW_POWER_MODE
-#if defined(SHUTDOWN)
-#define BQ76952_LOW_POWER_MODE BQ76952_LOW_POWER_MODE_SHUTDOWN
-#elif defined(SLEEP)
-#define BQ76952_LOW_POWER_MODE BQ76952_LOW_POWER_MODE_SLEEP
-#else
-#define BQ76952_LOW_POWER_MODE BQ76952_LOW_POWER_MODE_DEFAULT
-#endif
-#endif
-
-#if (BQ76952_LOW_POWER_MODE != BQ76952_LOW_POWER_MODE_SLEEP) && \
-    (BQ76952_LOW_POWER_MODE != BQ76952_LOW_POWER_MODE_DEEPSLEEP) && \
-    (BQ76952_LOW_POWER_MODE != BQ76952_LOW_POWER_MODE_SHUTDOWN)
-#error "Invalid BQ76952_LOW_POWER_MODE"
-#endif
-
-#define BQ76952_LOW_POWER_MODE_IS_SHUTDOWN \
-    (BQ76952_LOW_POWER_MODE == BQ76952_LOW_POWER_MODE_SHUTDOWN)
-
 typedef uint8_t byte;
 
 typedef enum
@@ -522,6 +497,7 @@ int bq76952_getCurrent(void);
 int bq76952_getCurrentNow(void);
 /* Đọc dòng trung bình thông qua cùng snapshot với CurrentNow. */
 int bq76952_getCurrentAvg(void);
+bool bq76952_getPassedChargeQ32(int64_t *charge_q32, uint32_t *time_s);
 /* Kiểm tra manufacturing status có bật quyền điều khiển FET hay chưa. */
 bool bq76952_areFETs_Enabled(void);
 /* Đọc thanh ghi Manufacturing Status hiện tại. */
@@ -635,10 +611,13 @@ bool bq76952_program_OTP(void);
 bool bq76952_setEnablePreRegulator(void);
 /* Bật REG0, REG1 và REG2 theo nguồn trên board. */
 bool bq76952_configurePowerOutputs(void);
-/* Prepare the BQ for the low-power policy selected in bq76952.c. */
-bool bq76952_prepareSleepWithReg2(void);
-/* Resume/re-arm BQ power outputs after the selected low-power policy exits. */
-void bq76952_resumeFromSleep(void);
+/* BQ power states are selected at runtime, independently of the STM32 STOP state. */
+bool bq76952_enterSleep(void);
+bool bq76952_exitSleep(void);
+bool bq76952_enterDeepSleep(void);
+bool bq76952_exitDeepSleep(void);
+bool bq76952_isDeepSleep(void);
+bool bq76952_requestShutdown(void);
 /* Cấu hình gain đo dòng cho shunt 0.5 mOhm trên board, scale theo ppm. */
 bool bq76952_setCurrentSenseCalibration(uint32_t gain_ppm);
 /* Cấu hình DA (digital/analog) block theo preset của thư viện. */
@@ -661,7 +640,7 @@ bool bq76952_setDCHGPinConfig(bool active_low);
 bool bq76952_setDDSGPinConfig(bool active_low);
 /* Cấu hình mask mặc định của alarm status. */
 bool bq76952_setDefaultAlarmMaskConfig(void);
-/* Configure BQ low-power behavior for the policy selected in bq76952.c. */
+/* Configure SLEEP, DEEPSLEEP and command-driven SHUTDOWN support. */
 bool bq76952_configureSleepWake(void);
 /* Chọn cell nào được tham gia phép đo điện áp bằng bitmask VCELL_MODE. */
 bool bq76952_setVcellMode(uint16_t vcell_mode);

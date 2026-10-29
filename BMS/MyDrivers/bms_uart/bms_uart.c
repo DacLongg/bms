@@ -16,6 +16,8 @@
 #define BMS_UART_OTP_WRITE_MAGIC1              0x54U
 #define BMS_UART_OTP_WRITE_MAGIC2              0x50U
 #define BMS_UART_OTP_WRITE_MAGIC3              0x21U
+#define BMS_UART_SOC_EMPTY_CELL_MV             3500U
+#define BMS_UART_SOC_FULL_CELL_MV              4200U
 
 typedef enum {
     BMS_UART_PARSE_SOF0 = 0,
@@ -34,6 +36,7 @@ typedef struct {
     uint8_t payload[BMS_UART_MAX_PAYLOAD_SIZE];
     uint8_t payload_pos;
     uint8_t crc_lo;
+    uint16_t crc;
 } bms_uart_parser_t;
 
 static UART_HandleTypeDef *g_bms_uart;
@@ -67,6 +70,7 @@ static void bms_uart_handle_read_summary(uint8_t command, uint8_t length);
 static void bms_uart_handle_read_cells(uint8_t command, uint8_t length);
 static void bms_uart_handle_read_faults(uint8_t command, uint8_t length);
 static void bms_uart_handle_read_limits(uint8_t command, uint8_t length);
+static void bms_uart_handle_read_current(uint8_t command, uint8_t length);
 static void bms_uart_handle_otp_check(uint8_t command, uint8_t length);
 static void bms_uart_handle_otp_write(uint8_t command,
                                       const uint8_t *payload,
@@ -75,15 +79,23 @@ static void bms_uart_handle_otp_read(uint8_t command, uint8_t length);
 static void bms_uart_handle_calibrate_current(uint8_t command,
                                               const uint8_t *payload,
                                               uint8_t length);
+static void bms_uart_handle_set_balancing(uint8_t command,
+                                             const uint8_t *payload,
+                                             uint8_t length);
+static void bms_uart_handle_read_status(uint8_t command, uint8_t length);
+static void bms_uart_handle_read_pack_voltage(uint8_t command, uint8_t length);
+static void bms_uart_handle_read_cell_count(uint8_t command, uint8_t length);
+static void bms_uart_handle_read_temperature(uint8_t command, uint8_t length);
+static void bms_uart_handle_read_cycle_count(uint8_t command, uint8_t length);
 static void bms_uart_send_otp_status(uint8_t command,
                                      const bq76952_otp_status_t *status);
 static void bms_uart_send_current_calibration_result(uint8_t command,
                                                      bms_uart_status_t status,
                                                      const BMS_CurrentCalibrationResult_t *result);
 static uint16_t bms_uart_fault_bitmap(const BMS_Tracking_t *tracking);
-static uint8_t bms_uart_fet_bitmap(const BMS_Tracking_t *tracking);
 static uint8_t bms_uart_gate_signal_bitmap(const BMS_Tracking_t *tracking);
 static uint16_t bms_uart_otp_flags(const bq76952_otp_status_t *status);
+static uint16_t bms_uart_crc16_update(uint16_t crc, uint8_t byte);
 static uint16_t bms_uart_crc16(const uint8_t *data, uint16_t length);
 static int32_t bms_uart_get_i32(const uint8_t *payload);
 static bool bms_uart_put_u8(uint8_t *payload, uint8_t *length, uint8_t value);
@@ -198,11 +210,13 @@ static void bms_uart_parse_byte(uint8_t byte)
 
     case BMS_UART_PARSE_COMMAND:
         g_parser.command = byte;
+        g_parser.crc = bms_uart_crc16_update(0xFFFFU, byte);
         g_parser.state = BMS_UART_PARSE_LENGTH;
         break;
 
     case BMS_UART_PARSE_LENGTH:
         g_parser.length = byte;
+        g_parser.crc = bms_uart_crc16_update(g_parser.crc, byte);
         g_parser.payload_pos = 0U;
         if (g_parser.length > BMS_UART_MAX_PAYLOAD_SIZE) {
             bms_uart_reset_parser();
@@ -215,6 +229,7 @@ static void bms_uart_parse_byte(uint8_t byte)
 
     case BMS_UART_PARSE_PAYLOAD:
         g_parser.payload[g_parser.payload_pos++] = byte;
+        g_parser.crc = bms_uart_crc16_update(g_parser.crc, byte);
         if (g_parser.payload_pos >= g_parser.length) {
             g_parser.state = BMS_UART_PARSE_CRC_LO;
         }
@@ -226,19 +241,10 @@ static void bms_uart_parse_byte(uint8_t byte)
         break;
 
     case BMS_UART_PARSE_CRC_HI: {
-        uint8_t crc_input[BMS_UART_MAX_PAYLOAD_SIZE + 2U];
         uint16_t received_crc;
-        uint16_t calculated_crc;
-
-        crc_input[0] = g_parser.command;
-        crc_input[1] = g_parser.length;
-        if (g_parser.length > 0U) {
-            memcpy(&crc_input[2], g_parser.payload, g_parser.length);
-        }
 
         received_crc = (uint16_t)g_parser.crc_lo | ((uint16_t)byte << 8);
-        calculated_crc = bms_uart_crc16(crc_input, (uint16_t)(g_parser.length + 2U));
-        if (received_crc == calculated_crc) {
+        if (received_crc == g_parser.crc) {
             bms_uart_handle_frame(g_parser.command,
                                   g_parser.payload,
                                   g_parser.length);
@@ -287,6 +293,30 @@ static void bms_uart_handle_frame(uint8_t command,
         bms_uart_handle_read_limits(command, length);
         break;
 
+    case BMS_UART_CMD_READ_CURRENT:
+        bms_uart_handle_read_current(command, length);
+        break;
+
+    case BMS_UART_CMD_READ_STATUS:
+        bms_uart_handle_read_status(command, length);
+        break;
+
+    case BMS_UART_CMD_READ_PACK_VOLTAGE:
+        bms_uart_handle_read_pack_voltage(command, length);
+        break;
+
+    case BMS_UART_CMD_READ_CELL_COUNT:
+        bms_uart_handle_read_cell_count(command, length);
+        break;
+
+    case BMS_UART_CMD_READ_TEMPERATURE:
+        bms_uart_handle_read_temperature(command, length);
+        break;
+
+    case BMS_UART_CMD_READ_CYCLE_COUNT:
+        bms_uart_handle_read_cycle_count(command, length);
+        break;
+
     case BMS_UART_CMD_OTP_CHECK:
         bms_uart_handle_otp_check(command, length);
         break;
@@ -301,6 +331,10 @@ static void bms_uart_handle_frame(uint8_t command,
 
     case BMS_UART_CMD_CALIBRATE_CURRENT:
         bms_uart_handle_calibrate_current(command, payload, length);
+        break;
+
+    case BMS_UART_CMD_SET_BALANCING:
+        bms_uart_handle_set_balancing(command, payload, length);
         break;
 
     default:
@@ -377,8 +411,6 @@ static void bms_uart_handle_ping(uint8_t command, const uint8_t *payload, uint8_
 static void bms_uart_handle_read_summary(uint8_t command, uint8_t length)
 {
     const BMS_Tracking_t *tracking;
-    // uint8_t payload[BMS_UART_MAX_PAYLOAD_SIZE];
-    // uint8_t payload_len = 0U;
 
     if (length != 0U) {
         bms_uart_send_status(command, BMS_UART_STATUS_BAD_LENGTH);
@@ -391,32 +423,6 @@ static void bms_uart_handle_read_summary(uint8_t command, uint8_t length)
         return;
     }
 
-
-    // (void)bms_uart_put_u8(payload, &payload_len, BMS_UART_PROTOCOL_VERSION);
-    // (void)bms_uart_put_u32(payload, &payload_len, HAL_GetTick());
-    // (void)bms_uart_put_u8(payload, &payload_len, tracking->initialized ? 1U : 0U);
-    // (void)bms_uart_put_u8(payload, &payload_len, tracking->connected ? 1U : 0U);
-    // (void)bms_uart_put_u8(payload, &payload_len, (uint8_t)tracking->state);
-    // (void)bms_uart_put_u8(payload, &payload_len, (uint8_t)tracking->currentDirection);
-    // (void)bms_uart_put_u16(payload, &payload_len, bms_uart_fault_bitmap(tracking));
-    // (void)bms_uart_put_u16(payload, &payload_len, tracking->stackVoltage);
-    // (void)bms_uart_put_u16(payload, &payload_len, tracking->packVoltage);
-    // (void)bms_uart_put_u16(payload, &payload_len, tracking->batAdcEstimatedPack_mV);
-    // (void)bms_uart_put_i32(payload, &payload_len, tracking->current_mA);
-    // (void)bms_uart_put_u16(payload, &payload_len, tracking->minCellVoltage);
-    // (void)bms_uart_put_u16(payload, &payload_len, tracking->maxCellVoltage);
-    // (void)bms_uart_put_u16(payload, &payload_len, tracking->averageCellVoltage);
-    // (void)bms_uart_put_u16(payload, &payload_len, tracking->deltaCellVoltage);
-    // (void)bms_uart_put_i16(payload, &payload_len, tracking->temperature[0]);
-    // (void)bms_uart_put_i16(payload, &payload_len, tracking->temperature[1]);
-    // (void)bms_uart_put_u32(payload, &payload_len, tracking->chargeThroughput_mAh);
-    // (void)bms_uart_put_u32(payload, &payload_len, tracking->dischargeThroughput_mAh);
-    // (void)bms_uart_put_u32(payload, &payload_len, tracking->equivalentCycle_milliCycles);
-    // (void)bms_uart_put_u8(payload, &payload_len, bms_uart_fet_bitmap(tracking));
-    // (void)bms_uart_put_u8(payload, &payload_len, tracking->balanceRequired ? 1U : 0U);
-    // (void)bms_uart_put_u16(payload, &payload_len, tracking->balanceMask);
-    // (void)bms_uart_put_u32(payload, &payload_len, tracking->alertCounter);
-    // (void)bms_uart_put_u16(payload, &payload_len, tracking->circle_counter);
 
     bms_uart_send_response(command, BMS_UART_STATUS_OK, (uint8_t *)tracking, sizeof(BMS_Tracking_t));
 }
@@ -496,6 +502,26 @@ static void bms_uart_handle_read_limits(uint8_t command, uint8_t length)
     (void)bms_uart_put_i16(payload, &payload_len, BMS_UNDERTEMP_CUTOFF_C);
     (void)bms_uart_put_u32(payload, &payload_len, BMS_NOMINAL_CAPACITY_MAH);
 
+    bms_uart_send_response(command, BMS_UART_STATUS_OK, payload, payload_len);
+}
+
+static void bms_uart_handle_read_current(uint8_t command, uint8_t length)
+{
+    const BMS_Tracking_t *tracking;
+    uint8_t payload[4];
+    uint8_t payload_len = 0U;
+
+    if (length != 0U) {
+        bms_uart_send_status(command, BMS_UART_STATUS_BAD_LENGTH);
+        return;
+    }
+    tracking = BMS_GetTracking();
+    if (!tracking->initialized || !tracking->connected) {
+        bms_uart_send_status(command, BMS_UART_STATUS_BUSY);
+        return;
+    }
+
+    (void)bms_uart_put_i32(payload, &payload_len, tracking->current_mA);
     bms_uart_send_response(command, BMS_UART_STATUS_OK, payload, payload_len);
 }
 
@@ -591,6 +617,150 @@ static void bms_uart_handle_calibrate_current(uint8_t command,
     bms_uart_send_current_calibration_result(command, status, &result);
 }
 
+static void bms_uart_handle_set_balancing(uint8_t command,
+                                             const uint8_t *payload,
+                                             uint8_t length)
+{
+    if (length != 1U) {
+        bms_uart_send_status(command, BMS_UART_STATUS_BAD_LENGTH);
+        return;
+    }
+    if ((payload[0] != 0U) && (payload[0] != 1U)) {
+        bms_uart_send_status(command, BMS_UART_STATUS_BAD_PAYLOAD);
+        return;
+    }
+    BMS_SetBalancingEnabled(payload[0] != 0U);
+    bms_uart_send_response(command, BMS_UART_STATUS_OK, payload, 1U);
+}
+
+static void bms_uart_handle_read_status(uint8_t command, uint8_t length)
+{
+    const BMS_Tracking_t *tracking;
+    uint8_t payload[4];
+    uint8_t payload_len = 0U;
+    uint8_t soc;
+    uint8_t flags = 0U;
+    uint16_t faults = 0U;
+    uint16_t min_mv;
+
+    if (length != 0U) {
+        bms_uart_send_status(command, BMS_UART_STATUS_BAD_LENGTH);
+        return;
+    }
+    tracking = BMS_GetTracking();
+    min_mv = tracking->cellVoltages.minCellVoltage;
+    if (!tracking->initialized || !tracking->connected || (min_mv == 0U)) {
+        bms_uart_send_status(command, BMS_UART_STATUS_BUSY);
+        return;
+    }
+
+    /* Coarse voltage-only estimate: the weakest cell limits usable capacity.
+     * The result is not coulomb-counted SOC and varies under load/charge. */
+    if (min_mv <= BMS_UART_SOC_EMPTY_CELL_MV) {
+        soc = 0U;
+    } else if (min_mv >= BMS_UART_SOC_FULL_CELL_MV) {
+        soc = 100U;
+    } else {
+        soc = (uint8_t)(((uint32_t)(min_mv - BMS_UART_SOC_EMPTY_CELL_MV) * 100U) /
+                        (BMS_UART_SOC_FULL_CELL_MV - BMS_UART_SOC_EMPTY_CELL_MV));
+    }
+
+    flags |= tracking->charging ? (1U << 0) : 0U;
+    flags |= tracking->discharging ? (1U << 1) : 0U;
+    flags |= tracking->chargeFetEnabled ? (1U << 2) : 0U;
+    flags |= tracking->dischargeFetEnabled ? (1U << 3) : 0U;
+    flags |= (tracking->balanceMask != 0U) ? (1U << 4) : 0U;
+    flags |= BMS_IsBalancingEnabled() ? (1U << 5) : 0U;
+
+    faults |= tracking->faults.cellOverVoltage ? (1U << 0) : 0U;
+    faults |= tracking->faults.cellUnderVoltage ? (1U << 1) : 0U;
+    faults |= tracking->faults.chargeOverCurrent ? (1U << 2) : 0U;
+    faults |= tracking->faults.dischargeOverCurrent ? (1U << 3) : 0U;
+    faults |= (tracking->faults.chargeOverTemperature ||
+               tracking->faults.dischargeOverTemperature) ? (1U << 4) : 0U;
+    faults |= tracking->faults.underTemperature ? (1U << 5) : 0U;
+    faults |= tracking->faults.shortCircuit ? (1U << 6) : 0U;
+    /* The current tracking structure has no dedicated sensor-fault flag. */
+
+    (void)bms_uart_put_u8(payload, &payload_len, soc);
+    (void)bms_uart_put_u8(payload, &payload_len, flags);
+    (void)bms_uart_put_u16(payload, &payload_len, faults);
+    bms_uart_send_response(command, BMS_UART_STATUS_OK, payload, payload_len);
+}
+
+static void bms_uart_handle_read_pack_voltage(uint8_t command, uint8_t length)
+{
+    const BMS_Tracking_t *tracking;
+    uint8_t payload[4];
+    uint8_t payload_len = 0U;
+
+    if (length != 0U) {
+        bms_uart_send_status(command, BMS_UART_STATUS_BAD_LENGTH);
+        return;
+    }
+    tracking = BMS_GetTracking();
+    if (!tracking->initialized || !tracking->connected ||
+        (tracking->packVoltage == 0U)) {
+        bms_uart_send_status(command, BMS_UART_STATUS_BUSY);
+        return;
+    }
+    (void)bms_uart_put_u32(payload, &payload_len, tracking->packVoltage);
+    bms_uart_send_response(command, BMS_UART_STATUS_OK, payload, payload_len);
+}
+
+static void bms_uart_handle_read_cell_count(uint8_t command, uint8_t length)
+{
+    uint8_t cell_count = BMS_NUMBER_OF_CELLS;
+
+    if (length != 0U) {
+        bms_uart_send_status(command, BMS_UART_STATUS_BAD_LENGTH);
+        return;
+    }
+    bms_uart_send_response(command, BMS_UART_STATUS_OK, &cell_count, 1U);
+}
+
+static void bms_uart_handle_read_temperature(uint8_t command, uint8_t length)
+{
+    const BMS_Tracking_t *tracking;
+    uint8_t payload[2];
+    uint8_t payload_len = 0U;
+
+    if (length != 0U) {
+        bms_uart_send_status(command, BMS_UART_STATUS_BAD_LENGTH);
+        return;
+    }
+    tracking = BMS_GetTracking();
+    if (!tracking->initialized || !tracking->connected ||
+        (tracking->temperature[0] < -40) ||
+        (tracking->temperature[0] > 125)) {
+        bms_uart_send_status(command, BMS_UART_STATUS_BUSY);
+        return;
+    }
+    (void)bms_uart_put_i16(payload, &payload_len,
+                           (int16_t)(tracking->temperature[0] * 10));
+    bms_uart_send_response(command, BMS_UART_STATUS_OK, payload, payload_len);
+}
+
+static void bms_uart_handle_read_cycle_count(uint8_t command, uint8_t length)
+{
+    const BMS_Tracking_t *tracking;
+    uint8_t payload[4];
+    uint8_t payload_len = 0U;
+
+    if (length != 0U) {
+        bms_uart_send_status(command, BMS_UART_STATUS_BAD_LENGTH);
+        return;
+    }
+    tracking = BMS_GetTracking();
+    if (!tracking->initialized || !tracking->connected) {
+        bms_uart_send_status(command, BMS_UART_STATUS_BUSY);
+        return;
+    }
+    (void)bms_uart_put_u32(payload, &payload_len,
+                           tracking->completedCycleCount);
+    bms_uart_send_response(command, BMS_UART_STATUS_OK, payload, payload_len);
+}
+
 static void bms_uart_send_otp_status(uint8_t command,
                                      const bq76952_otp_status_t *status)
 {
@@ -628,20 +798,10 @@ static void bms_uart_send_current_calibration_result(uint8_t command,
                                                      bms_uart_status_t status,
                                                      const BMS_CurrentCalibrationResult_t *result)
 {
-    // uint8_t payload[BMS_UART_MAX_PAYLOAD_SIZE];
-    // uint8_t payload_len = 0U;
-
     if (result == NULL) {
         bms_uart_send_status(command, BMS_UART_STATUS_INTERNAL_ERROR);
         return;
     }
-
-    // (void)bms_uart_put_u8(payload, &payload_len, (uint8_t)result->status);
-    // (void)bms_uart_put_i32(payload, &payload_len, result->actual_mA);
-    // (void)bms_uart_put_i32(payload, &payload_len, result->measured_mA);
-    // (void)bms_uart_put_u32(payload, &payload_len, result->deviation_ppm);
-    // (void)bms_uart_put_u32(payload, &payload_len, result->oldGain_ppm);
-    // (void)bms_uart_put_u32(payload, &payload_len, result->newGain_ppm);
 
     bms_uart_send_response(command, status, (uint8_t *)result, sizeof(BMS_CurrentCalibrationResult_t));
 }
@@ -654,33 +814,16 @@ static uint16_t bms_uart_fault_bitmap(const BMS_Tracking_t *tracking)
         return 0U;
     }
 
-    bitmap |= tracking->faults.cellOverVoltage ? (uint16_t)(1U << 0) : 0U;
-    bitmap |= tracking->faults.cellUnderVoltage ? (uint16_t)(1U << 1) : 0U;
-    bitmap |= tracking->faults.chargeOverTemperature ? (uint16_t)(1U << 2) : 0U;
-    bitmap |= tracking->faults.dischargeOverTemperature ? (uint16_t)(1U << 3) : 0U;
-    bitmap |= tracking->faults.underTemperature ? (uint16_t)(1U << 4) : 0U;
-    bitmap |= tracking->faults.chargeOverCurrent ? (uint16_t)(1U << 5) : 0U;
-    bitmap |= tracking->faults.dischargeOverCurrent ? (uint16_t)(1U << 6) : 0U;
-    bitmap |= tracking->faults.shortCircuit ? (uint16_t)(1U << 7) : 0U;
-    bitmap |= tracking->faults.bqSafetyFault ? (uint16_t)(1U << 8) : 0U;
-    bitmap |= tracking->faults.communicationFault ? (uint16_t)(1U << 9) : 0U;
-    return bitmap;
-}
-
-static uint8_t bms_uart_fet_bitmap(const BMS_Tracking_t *tracking)
-{
-    uint8_t bitmap = 0U;
-
-    if (tracking == NULL) {
-        return 0U;
-    }
-
-    bitmap |= tracking->fetsEnabled ? (uint8_t)(1U << 0) : 0U;
-    bitmap |= tracking->chargeFetEnabled ? (uint8_t)(1U << 1) : 0U;
-    bitmap |= tracking->dischargeFetEnabled ? (uint8_t)(1U << 2) : 0U;
-    bitmap |= tracking->chargeDisabled ? (uint8_t)(1U << 3) : 0U;
-    bitmap |= tracking->dischargeDisabled ? (uint8_t)(1U << 4) : 0U;
-    bitmap |= tracking->fetOffAsserted ? (uint8_t)(1U << 5) : 0U;
+    bitmap |= (uint16_t)tracking->faults.cellOverVoltage << 0;
+    bitmap |= (uint16_t)tracking->faults.cellUnderVoltage << 1;
+    bitmap |= (uint16_t)tracking->faults.chargeOverTemperature << 2;
+    bitmap |= (uint16_t)tracking->faults.dischargeOverTemperature << 3;
+    bitmap |= (uint16_t)tracking->faults.underTemperature << 4;
+    bitmap |= (uint16_t)tracking->faults.chargeOverCurrent << 5;
+    bitmap |= (uint16_t)tracking->faults.dischargeOverCurrent << 6;
+    bitmap |= (uint16_t)tracking->faults.shortCircuit << 7;
+    bitmap |= (uint16_t)tracking->faults.bqSafetyFault << 8;
+    bitmap |= (uint16_t)tracking->faults.communicationFault << 9;
     return bitmap;
 }
 
@@ -692,8 +835,8 @@ static uint8_t bms_uart_gate_signal_bitmap(const BMS_Tracking_t *tracking)
         return 0U;
     }
 
-    bitmap |= tracking->chargeGateFaultSignal ? (uint8_t)(1U << 0) : 0U;
-    bitmap |= tracking->dischargeGateFaultSignal ? (uint8_t)(1U << 1) : 0U;
+    bitmap |= (uint8_t)tracking->chargeGateFaultSignal << 0;
+    bitmap |= (uint8_t)tracking->dischargeGateFaultSignal << 1;
     return bitmap;
 }
 
@@ -705,12 +848,12 @@ static uint16_t bms_uart_otp_flags(const bq76952_otp_status_t *status)
         return 0U;
     }
 
-    flags |= status->fullAccessOk ? (uint16_t)(1U << 0) : 0U;
-    flags |= status->configUpdateOk ? (uint16_t)(1U << 1) : 0U;
-    flags |= status->checkOk ? (uint16_t)(1U << 2) : 0U;
-    flags |= status->writeOk ? (uint16_t)(1U << 3) : 0U;
-    flags |= status->otpBlocked ? (uint16_t)(1U << 4) : 0U;
-    flags |= status->otpPending ? (uint16_t)(1U << 5) : 0U;
+    flags |= (uint16_t)status->fullAccessOk << 0;
+    flags |= (uint16_t)status->configUpdateOk << 1;
+    flags |= (uint16_t)status->checkOk << 2;
+    flags |= (uint16_t)status->writeOk << 3;
+    flags |= (uint16_t)status->otpBlocked << 4;
+    flags |= (uint16_t)status->otpPending << 5;
     flags |= (status->dchgPinConfig == BQ_PIN_CONFIG_DCHG_ACTIVE_HIGH) ? (uint16_t)(1U << 6) : 0U;
     flags |= (status->ddsgPinConfig == BQ_PIN_CONFIG_DDSG_ACTIVE_HIGH) ? (uint16_t)(1U << 7) : 0U;
     flags |= ((status->daConfig & BQ_DA_CONFIG_USER_VOLTS_CV) != 0U) ? (uint16_t)(1U << 8) : 0U;
@@ -731,16 +874,22 @@ static uint16_t bms_uart_crc16(const uint8_t *data, uint16_t length)
     uint16_t crc = 0xFFFFU;
 
     for (uint16_t i = 0U; i < length; ++i) {
-        crc ^= data[i];
-        for (uint8_t bit = 0U; bit < 8U; ++bit) {
-            if ((crc & 0x0001U) != 0U) {
-                crc = (uint16_t)((crc >> 1) ^ 0xA001U);
-            } else {
-                crc >>= 1;
-            }
-        }
+        crc = bms_uart_crc16_update(crc, data[i]);
     }
 
+    return crc;
+}
+
+static uint16_t bms_uart_crc16_update(uint16_t crc, uint8_t byte)
+{
+    crc ^= byte;
+    for (uint8_t bit = 0U; bit < 8U; ++bit) {
+        if ((crc & 1U) != 0U) {
+            crc = (uint16_t)((crc >> 1) ^ 0xA001U);
+        } else {
+            crc >>= 1;
+        }
+    }
     return crc;
 }
 

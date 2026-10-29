@@ -19,7 +19,7 @@
 
 #define BMS_BALANCE_DELTA_MV                        30U
 #define BMS_BALANCE_DELTA_MV_RECOVERY               20U
-#define BMS_BALANCE_MIN_CELL_MV                     3800U
+#define BMS_BALANCE_MIN_CELL_MV                     3500U
 #define BMS_BALANCE_REFRESH_MS                      10000U
 #define BMS_BALANCE_MIN_TEMP_C                      5
 #define BMS_BALANCE_MAX_TEMP_C                      45
@@ -27,7 +27,7 @@
 #define BMS_BALANCE_INTERVAL_SEC                    20U
 #define BMS_BALANCE_MAX_ACTIVE_CELLS                9U
 
-#define BMS_CURRENT_DEADBAND_MA                     300L
+#define BMS_CURRENT_DEADBAND_MA                     100L
 #define BMS_OVER_CURRENT_CHARGE                     1000
 #define BMS_OVER_CURRENT_DISCHARGE                  65000L
 #define BMS_OVER_CURRENT_MA                         BMS_OVER_CURRENT_DISCHARGE
@@ -48,8 +48,8 @@
 #define BMS_BQ_SENSE_RESISTOR_UOHM                  500UL
 #define BMS_BQ_PROTECTION_DELAY_MS                  3000U
 #define BMS_CURRENT_CHARGE_IS_POSITIVE              1
-#define BMS_FLASH_SAVE_INTERVAL_MS                  600000UL
-#define BMS_FLASH_SAVE_DELTA_MAH                    500UL
+#define BMS_FLASH_SAVE_INTERVAL_MS                  60000UL
+#define BMS_FLASH_SAVE_DELTA_MAH                    50UL
 
 #define NUMBER_OF_CELLS                             BMS_NUMBER_OF_CELLS
 #define NUMBER_OF_THERMISTORS                       BMS_NUMBER_OF_THERMISTORS
@@ -121,9 +121,7 @@ typedef struct {
     // uint16_t maxCellVoltage;
     // uint16_t averageCellVoltage;
     // uint16_t deltaCellVoltage;
-    uint16_t stackVoltage;
     uint16_t packVoltage;
-    uint16_t circle_counter;
 
     int32_t  current_mA;
     int16_t  temperature[BMS_NUMBER_OF_THERMISTORS];
@@ -155,15 +153,18 @@ typedef struct {
     bool     balanceRequired;
     uint16_t balanceMask;
 
-    uint64_t chargeAccumulated_mAs;
-    uint64_t dischargeAccumulated_mAs;
-    uint32_t chargeThroughput_mAh;
-    uint32_t equivalentCycle_milliCycles;
+    uint32_t completedCycleCount;
     uint32_t currentCalibrationGainPpm;
 } BMS_Tracking_t;
 
 void BMS_Init(void);
 void BMS_Update(void);
+void BMS_ResetCellAveraging(void);
+void BMS_SetBalancingEnabled(bool enabled);
+bool BMS_IsBalancingEnabled(void);
+bool BMS_UpdateUsageCounter(void);
+bool BMS_SaveUsageNow(void);
+bool BMS_HasFreshCellMeasurements(void);
 const BMS_Tracking_t *BMS_GetTracking(void);
 bool BMS_IsFaultActive(void);
 BMS_CurrentCalibStatus_t BMS_CalibrateCurrent(int32_t actual_mA, BMS_CurrentCalibrationResult_t *result);

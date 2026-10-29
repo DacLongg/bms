@@ -211,7 +211,7 @@ $(BUILD_CONFIG_FILE): FORCE | $(BUILD_DIR)
 	@cmp -s $(BUILD_DIR)/.build_config.tmp $@ || mv $(BUILD_DIR)/.build_config.tmp $@
 	@rm -f $(BUILD_DIR)/.build_config.tmp
 
-$(BUILD_DIR)/%.o: %.c Makefile $(BUILD_CONFIG_FILE) | $(BUILD_DIR) 
+$(BUILD_DIR)/%.o: %.c Makefile $(BUILD_CONFIG_FILE) | $(BUILD_DIR)
 	$(CC) -c $(CFLAGS) -Wa,-a,-ad,-alms=$(BUILD_DIR)/$(notdir $(<:.c=.lst)) $< -o $@
 
 $(BUILD_DIR)/%.o: %.s Makefile $(BUILD_CONFIG_FILE) | $(BUILD_DIR)

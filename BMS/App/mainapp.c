@@ -6,17 +6,29 @@
 
 extern RTC_HandleTypeDef hrtc;
 extern UART_HandleTypeDef huart2;
-extern LPTIM_HandleTypeDef hlptim1;
 
 #define MAINAPP_BMS_UPDATE_MS 100U
-#define MAINAPP_IDLE_BEFORE_SLEEP_MINUTES 3U
-#define MAINAPP_SLEEP_WAKEUP_MINUTE 5U
+#define MAINAPP_IDLE_BEFORE_SLEEP_MINUTES 1U
+#define MAINAPP_SLEEP_WAKEUP_MINUTES 5U
+#define MAINAPP_DEEP_SLEEP_WAKEUP_DAYS 5U /* Change to 15U or 30U if required. */
+#define MAINAPP_DEEP_SLEEP_AFTER_DAYS 30U
+#define MAINAPP_STOP_RTC_CHUNK_SECONDS (12UL * 60UL * 60UL)
 #define MAINAPP_ALERT_WAKE_CLEAR_TRIES 3U
 #define MAINAPP_ALERT_WAKE_SETTLE_MS 2U
 #define MAINAPP_ALERT_IDLE_LEVEL GPIO_PIN_RESET
 
 #define MAINAPP_IDLE_BEFORE_SLEEP_MS ((uint32_t)(MAINAPP_IDLE_BEFORE_SLEEP_MINUTES) * 60UL * 1000UL)
-#define MAINAPP_SLEEP_WAKEUP_MS ((uint32_t)(MAINAPP_SLEEP_WAKEUP_MINUTE) * 60UL * 1000UL)
+#define MAINAPP_SLEEP_WAKEUP_SECONDS ((uint32_t)(MAINAPP_SLEEP_WAKEUP_MINUTES) * 60UL)
+#define MAINAPP_DEEP_SLEEP_WAKEUP_SECONDS ((uint32_t)(MAINAPP_DEEP_SLEEP_WAKEUP_DAYS) * 24UL * 60UL * 60UL)
+#define MAINAPP_DEEP_SLEEP_AFTER_SECONDS ((uint32_t)(MAINAPP_DEEP_SLEEP_AFTER_DAYS) * 24UL * 60UL * 60UL)
+
+#if (MAINAPP_SLEEP_WAKEUP_MINUTES == 0U) || (MAINAPP_SLEEP_WAKEUP_MINUTES > 1440U)
+#error "SLEEP wake interval must be between 1 and 1440 minutes"
+#endif
+
+#if (MAINAPP_DEEP_SLEEP_WAKEUP_DAYS == 0U) || (MAINAPP_DEEP_SLEEP_WAKEUP_DAYS > 30U)
+#error "DEEPSLEEP wake interval must be between 1 and 30 days"
+#endif
 
 #if BMS_DEBUG_LOG_ENABLE
 // static const char *BMS_StateName(BMS_State_t state)
@@ -48,8 +60,8 @@ static void MainApp_LogBatteryInfo(const BMS_Tracking_t *tracking)
     }
 
 
-    BMS_LOG_INFO("bat c=%lu st=%s pack=%u adcPack=%u cur=%ld dir=%u chgNow=%u dchNow=%u chgFet=%u dchFet=%u fetEn=%u",
-                 (unsigned long)tracking->circle_counter,
+    BMS_LOG_INFO("bat cycles=%lu st=%s pack=%u adcPack=%u cur=%ld dir=%u chgNow=%u dchNow=%u chgFet=%u dchFet=%u fetEn=%u",
+                 (unsigned long)tracking->completedCycleCount,
                  BMS_StateName(tracking->state),
                  tracking->packVoltage,
                  tracking->batAdcEstimatedPack_mV,
@@ -114,6 +126,7 @@ static bool MainApp_PrepareAlertWakeLine(void)
 
     alarm_raw_status = bq76952_getAlertRawStatusRegister();
     alert_pin = HAL_GPIO_ReadPin(ALERT_GPIO_Port, ALERT_Pin);
+    (void)alarm_raw_status;
     BMS_LOG_WARN("sleep blocked alert status=0x%04x raw=0x%04x pin=%u",
                  (unsigned int)alarm_status,
                  (unsigned int)alarm_raw_status,
@@ -126,29 +139,19 @@ static bool MainApp_IsPackSleepEligible(const BMS_Tracking_t *tracking)
     if (tracking == NULL) {
         return false;
     }
-    if (!tracking->initialized || !tracking->connected) {
+    if (!tracking->initialized || !tracking->connected ||
+        (tracking->cellVoltages.minCellVoltage < BMS_BALANCE_MIN_CELL_MV)) {
         return false;
     }
-    if (tracking->state != BMS_STATE_NORMAL) {
+    if (tracking->balanceMask != 0U) {
         return false;
     }
-    if (BMS_IsFaultActive()) {
-        return false;
-    }
-    // if (tracking->balanceRequired || (tracking->balanceMask != 0U)) {
-    //     return false;
-    // }
     if (tracking->currentDirection != BMS_CURRENT_IDLE) {
         return false;
     }
     if (tracking->charging || tracking->discharging) {
         return false;
     }
-// #if !BQ76952_LOW_POWER_MODE_IS_SHUTDOWN
-//     if (!tracking->bqSleepAllowed) {
-//         return false;
-//     }
-// #endif
     return true;
 }
 
@@ -162,12 +165,56 @@ static bool MainApp_HasChargeDischargeActivity(const BMS_Tracking_t *tracking)
            tracking->discharging;
 }
 
+static bool MainApp_RefreshAfterWake(void)
+{
+    uint32_t start = HAL_GetTick();
+    uint16_t alarm_enable = (uint16_t)bq76952_getAlarmEnableRegister();
+    bool full_scan = false;
+
+    /* DEEPSLEEP has no measurements. Wait for a fresh BQ scan before using
+     * the ten-sample cell filter for balance or shutdown decisions. FULLSCAN
+     * is normally masked to avoid waking the MCU on every scan. */
+    if ((alarm_enable == 0U) ||
+        !bq76952_setAlarmEnableRegister((uint16_t)(alarm_enable | 0x0080U))) {
+        return false;
+    }
+    if (bq76952_clearAlertStatusRegister(0x0080U)) {
+        while ((HAL_GetTick() - start) < 1500U) {
+            if ((bq76952_getAlertStatusRegister() & 0x0080U) != 0U) {
+                full_scan = true;
+                break;
+            }
+            HAL_Delay(20U);
+        }
+    }
+    if (!bq76952_setAlarmEnableRegister(alarm_enable)) {
+        return false;
+    }
+    (void)bq76952_clearAlertStatusRegister(0x0080U);
+    if (!full_scan) {
+        return false;
+    }
+    BMS_ResetCellAveraging();
+    for (uint8_t i = 0U; i < BMS_CELL_TIMES_ACUMMULATE; ++i) {
+        BMS_Update();
+        if ((i + 1U) < BMS_CELL_TIMES_ACUMMULATE) {
+            HAL_Delay(MAINAPP_BMS_UPDATE_MS);
+        }
+    }
+    return BMS_HasFreshCellMeasurements() && BMS_GetTracking()->connected &&
+           (BMS_GetTracking()->cellVoltages.minCellVoltage != 0U);
+}
+
 void mainapp(void)
 {
     static bool initialized = false;
     static uint32_t last_update_tick = 0U;
     static uint32_t last_activity_tick = 0U;
-    // static bool allow_immediate_sleep = false;
+    static uint32_t sleep_elapsed_s = 0U;
+    static bool deep_sleep_phase = false;
+    static uint32_t last_shutdown_attempt_tick = 0U;
+    static uint32_t last_refresh_retry_tick = 0U;
+    static bool measurements_ready = true;
     uint32_t now;
     const BMS_Tracking_t *tracking;
 
@@ -178,9 +225,10 @@ void mainapp(void)
         last_activity_tick = now;
         last_update_tick = now;
         initialized = true;
-        BMS_LOG_INFO("mainapp init sleepX=%lu min wakeY=%lu s",
+        BMS_LOG_INFO("mainapp init idle=%lu min sleepWake=%lu min deepWake=%lu days",
                      (unsigned long)MAINAPP_IDLE_BEFORE_SLEEP_MINUTES,
-                     (unsigned long)MAINAPP_SLEEP_WAKEUP_MINUTE);
+                     (unsigned long)MAINAPP_SLEEP_WAKEUP_MINUTES,
+                     (unsigned long)MAINAPP_DEEP_SLEEP_WAKEUP_DAYS);
         // BMS_Set_5V_Output(false);
     }
 
@@ -188,77 +236,153 @@ void mainapp(void)
 
     now = HAL_GetTick();
     if ((now - last_update_tick) >= MAINAPP_BMS_UPDATE_MS) {
-        BMS_Update();
+        if (measurements_ready) {
+            BMS_Update();
+        }
         last_update_tick = now;
         tracking = BMS_GetTracking();
+        if (!measurements_ready &&
+            ((now - last_refresh_retry_tick) >= 5000U)) {
+            last_refresh_retry_tick = now;
+            if (deep_sleep_phase ? bq76952_exitDeepSleep() :
+                                   bq76952_exitSleep()) {
+                measurements_ready = MainApp_RefreshAfterWake();
+            }
+            now = HAL_GetTick();
+            last_update_tick = now;
+        }
         bms_uart_task();
         MainApp_LogBatteryInfo(tracking);
 
         if (MainApp_HasChargeDischargeActivity(tracking)) {
             last_activity_tick = now;
-            // allow_immediate_sleep = false;
+            sleep_elapsed_s = 0U;
+            deep_sleep_phase = false;
+        } else if (tracking->balanceMask != 0U) {
+            last_activity_tick = now;
         }
 
-        if (MainApp_IsPackSleepEligible(tracking) &&
-            (((now - last_activity_tick) >= MAINAPP_IDLE_BEFORE_SLEEP_MS))) {
+        if (measurements_ready && tracking->initialized && tracking->connected &&
+            (tracking->cellVoltages.minCellVoltage != 0U) &&
+            (tracking->cellVoltages.minCellVoltage < BMS_BALANCE_MIN_CELL_MV) &&
+            ((last_shutdown_attempt_tick == 0U) ||
+             ((now - last_shutdown_attempt_tick) >= MAINAPP_IDLE_BEFORE_SLEEP_MS))) {
+            last_shutdown_attempt_tick = now;
+            bq76952_setCellBalanceMask(0U);
+            if (tracking->cellVoltages.deltaCellVoltage > BMS_BALANCE_DELTA_MV_RECOVERY) {
+                /* Below the balancing floor, continuing to bleed cells can
+                 * damage the weakest cell. Protect the pack first. */
+                BMS_LOG_WARN("shutdown with imbalance delta=%u mV",
+                             tracking->cellVoltages.deltaCellVoltage);
+            }
+            BMS_LOG_WARN("low cell %u mV: request shutdown",
+                         tracking->cellVoltages.minCellVoltage);
+            (void)BMS_UpdateUsageCounter();
+            if (!BMS_SaveUsageNow()) {
+                BMS_LOG_ERROR("usage checkpoint before shutdown failed");
+            }
+            if (!bq76952_requestShutdown()) {
+                BMS_LOG_ERROR("BQ shutdown request failed");
+            }
+            return;
+        }
+
+        if (measurements_ready && MainApp_IsPackSleepEligible(tracking) &&
+            (deep_sleep_phase ||
+             ((now - last_activity_tick) >= MAINAPP_IDLE_BEFORE_SLEEP_MS))) {
             power_manager_wakeup_source_t wake_source;
             HAL_StatusTypeDef sleep_rc;
             bool alert_ready;
             bool bq_sleep_ready = false;
+            bool bq_wake_ready;
+            bool bq_exited_early = false;
+            uint32_t remaining_seconds;
+
+            if (sleep_elapsed_s >= MAINAPP_DEEP_SLEEP_AFTER_SECONDS) {
+                deep_sleep_phase = true;
+            }
+            remaining_seconds = deep_sleep_phase ? MAINAPP_DEEP_SLEEP_WAKEUP_SECONDS :
+                                                   MAINAPP_SLEEP_WAKEUP_SECONDS;
 
             alert_ready = MainApp_PrepareAlertWakeLine();
             if (alert_ready) {
-                bq_sleep_ready = bq76952_prepareSleepWithReg2();
+                bq_sleep_ready = deep_sleep_phase ? bq76952_enterDeepSleep() :
+                                                    bq76952_enterSleep();
             }
-            BMS_LOG_INFO("sleep enter alert=%u bq_sleep=%u idle_ms=%lu",
+            BMS_LOG_INFO("sleep enter deep=%u alert=%u bq=%u idle_ms=%lu",
+                         deep_sleep_phase ? 1U : 0U,
                          alert_ready ? 1U : 0U,
                          bq_sleep_ready ? 1U : 0U,
                          (unsigned long)(now - last_activity_tick));
 
-            if ((alert_ready == true) &&
-                (bq_sleep_ready == true))
-            {
-#if !BQ76952_LOW_POWER_MODE_IS_SHUTDOWN
+            if (alert_ready && bq_sleep_ready) {
                 Disable_Power_Battery();
-#endif
-                sleep_rc = power_manager_enter_low_power_sleep(MAINAPP_SLEEP_WAKEUP_MS);
-                wake_source = power_manager_get_and_clear_wakeup_source();
-#if !BQ76952_LOW_POWER_MODE_IS_SHUTDOWN
+                do {
+                    uint32_t chunk_seconds = remaining_seconds;
+                    if (chunk_seconds > MAINAPP_STOP_RTC_CHUNK_SECONDS) {
+                        chunk_seconds = MAINAPP_STOP_RTC_CHUNK_SECONDS;
+                    }
+                    sleep_rc = power_manager_enter_low_power_sleep(chunk_seconds * 1000UL);
+                    wake_source = power_manager_get_and_clear_wakeup_source();
+                    if (!deep_sleep_phase) {
+                        (void)BMS_UpdateUsageCounter();
+                    }
+                    if ((sleep_rc != HAL_OK) ||
+                        ((wake_source & POWER_MANAGER_WAKEUP_RTC) == 0U) ||
+                        ((wake_source & POWER_MANAGER_WAKEUP_GPIO) != 0U)) {
+                        break;
+                    }
+                    remaining_seconds -= chunk_seconds;
+                    if ((remaining_seconds > 0U) &&
+                        !(deep_sleep_phase ? bq76952_isDeepSleep() :
+                                              bq76952_getBatteryStatusRegister().bits.SLEEP_MODE != 0U)) {
+                        /* The BQ can wake without an MCU GPIO edge. */
+                        bq_exited_early = true;
+                        break;
+                    }
+                } while (remaining_seconds > 0U);
                 Enable_Power_Battery();
-#endif
-                bq76952_resumeFromSleep();
-                BMS_Update();
+                bq_wake_ready = deep_sleep_phase ? bq76952_exitDeepSleep() :
+                                                   bq76952_exitSleep();
+                if (bq_wake_ready) {
+                    bq_wake_ready = MainApp_RefreshAfterWake();
+                }
+                measurements_ready = bq_wake_ready;
                 bms_uart_task();
                 now = HAL_GetTick();
                 last_update_tick = now;
 
-                if (sleep_rc != HAL_OK) {
-                    // allow_immediate_sleep = false;
-                    BMS_LOG_ERROR("sleep enter failed");
+                if ((sleep_rc != HAL_OK) || !bq_wake_ready) {
+                    last_activity_tick = now;
+                    BMS_LOG_ERROR("sleep/wake failed");
                     return;
                 }
 
-                if ((wake_source & POWER_MANAGER_WAKEUP_GPIO) != 0U) {
-                    // allow_immediate_sleep = false;
+                if (((wake_source & POWER_MANAGER_WAKEUP_GPIO) != 0U) ||
+                    bq_exited_early) {
                     last_activity_tick = now;
-                    BMS_LOG_INFO("wake gpio");
+                    sleep_elapsed_s = 0U;
+                    deep_sleep_phase = false;
+                    BMS_LOG_INFO("wake external");
                 } else if ((wake_source & POWER_MANAGER_WAKEUP_RTC) != 0U) {
-                    // allow_immediate_sleep = true;
+                    if (!deep_sleep_phase) {
+                        uint32_t until_deep_sleep = MAINAPP_DEEP_SLEEP_AFTER_SECONDS - sleep_elapsed_s;
+                        sleep_elapsed_s += (MAINAPP_SLEEP_WAKEUP_SECONDS < until_deep_sleep) ?
+                                           MAINAPP_SLEEP_WAKEUP_SECONDS : until_deep_sleep;
+                    }
                     BMS_LOG_INFO("wake rtc");
                 } else {
-                    // allow_immediate_sleep = false;
                     last_activity_tick = now;
                     BMS_LOG_WARN("wake unknown");
                 }
-            }
-            else{
+            } else {
                 if (bq_sleep_ready) {
-                    bq76952_resumeFromSleep();
+                    (void)(deep_sleep_phase ? bq76952_exitDeepSleep() :
+                                              bq76952_exitSleep());
                 }
                 last_activity_tick = now;
                 BMS_LOG_ERROR("sleep enter failed");
             }
-            
         }
         if(tracking->cellVoltages.IndexAccumulated[0] == 0)
         {

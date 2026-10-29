@@ -9,16 +9,17 @@
 #define STORAGE_FLASH_BASE_ADDRESS       0x08007C00UL
 #define STORAGE_FLASH_SIZE_BYTES         1024UL
 #define STORAGE_FLASH_MAGIC              0x424D5355UL
-#define STORAGE_FLASH_VERSION            2UL
+#define STORAGE_FLASH_VERSION            3UL
+#define STORAGE_FLASH_LEGACY_VERSION     2UL
 #define STORAGE_FLASH_CURRENT_CALIBRATION_DEFAULT_PPM 1000000UL
 
 typedef struct {
     uint32_t magic;
     uint32_t version;
     uint32_t writeCounter;
-    uint32_t chargeThroughput_mAh;
-    uint32_t dischargeThroughput_mAh;
-    uint32_t equivalentCycle_milliCycles;
+    uint32_t completedCycleCount;
+    uint32_t cycleRemainderQ32Lo;
+    uint32_t cycleRemainderQ32Hi;
     uint32_t nominalCapacity_mAh;
     uint32_t currentCalibrationGainPpm;
     uint32_t checksum;

@@ -30,12 +30,12 @@ Tài liệu này mô tả cách hoạt động của tất cả hàm trong file 
 - `BMS_UpdateCurrentDirection()`
 - `BMS_UpdateFaultFlags()`
 - `BMS_MergeBQFaultFlags()`
-- `BMS_UpdateCoulombCounter(dt_ms)`
+- `BMS_UpdateUsageCounter()`
 - `BMS_UpdateState()`
 - `BMS_ApplyFetPolicy()`
 - `BMS_UpdateBalancing(now)`
 - `BMS_SavePersistedDataIfNeeded(now)`
-5. Tăng `circle_counter`, đánh dấu `initialized = true`.
+5. Đánh dấu `initialized = true`.
 - Ý nghĩa: Đây là nơi gom đủ sensor + bảo vệ + điều khiển FET + cân bằng + lưu flash.
 
 ## 3. `const BMS_Tracking_t *BMS_GetTracking(void)`
@@ -71,7 +71,7 @@ Tài liệu này mô tả cách hoạt động của tất cả hàm trong file 
 - Zero mảng điện áp cell và nhiệt độ.
 - Reset state về `BMS_STATE_INIT`.
 - Reset toàn bộ cờ dòng điện/FET/lỗi/cân bằng.
-- Reset các bộ tích lũy coulomb (`chargeAccumulated_mAs`, `dischargeAccumulated_mAs`) và throughput/cycle.
+- Reset bộ đếm chu kỳ trong tracking; phần dư Q32 nội bộ được khôi phục từ flash khi khởi tạo.
 - Ý nghĩa: Tạo trạng thái sạch trước khi khởi tạo monitor.
 
 ## 7. `static void BMS_ConfigureMonitor(void)`
@@ -98,7 +98,6 @@ Tài liệu này mô tả cách hoạt động của tất cả hàm trong file 
 2. Đọc mảng cell voltage (`bq76952_getOnlyConnectedCellVoltages`).
 3. Nếu cell voltage âm thì ép 0, ngược lại cast sang `uint16_t`.
 4. Đọc:
-- `stackVoltage` tam thoi khong xu ly trong runtime tracking.
 - `packVoltage` duoc tinh bang tong `cellVoltages[]` trong `BMS_UpdateCellStatistics()`.
 - `current_mA`
 - `temperature[0] = TS1`, `temperature[1] = TS3`
@@ -188,19 +187,10 @@ Tài liệu này mô tả cách hoạt động của tất cả hàm trong file 
 - `bq76952_setFET(ALL, ON)`, sau do doc lai `FET Status()`.
 - Ý nghĩa: Cơ chế thực thi cuối cùng của bảo vệ mềm.
 
-## 15. `static void BMS_UpdateCoulombCounter(BMS_Tracking_t *tracking, uint32_t dt_ms)`
-- Mục đích: Tích lũy dung lượng đã sạc/xả theo phương pháp coulomb counting đơn giản.
-- Cách tính:
-1. Lấy `abs_current`; nếu <= deadband thì bỏ qua mẫu.
-2. `sample_mAs = abs_current * dt_ms / 1000`.
-3. Nếu chiều dòng là charge thì cộng vào `chargeAccumulated_mAs`.
-4. Nếu chiều dòng là discharge thì cộng vào `dischargeAccumulated_mAs`.
-5. Quy đổi:
-- `chargeThroughput_mAh = chargeAccumulated_mAs / 3600`
-- `dischargeThroughput_mAh = dischargeAccumulated_mAs / 3600`
-6. Tính vòng đời tương đương:
-- `equivalentCycle_milliCycles = chargeThroughput_mAh * 1000 / BMS_NOMINAL_CAPACITY_MAH`.
-- Ý nghĩa: Theo dõi độ hao mòn/cycle ở mức ước lượng.
+## 15. `bool BMS_UpdateUsageCounter(void)`
+- Đọc PASSQ Q32 và thời gian tích lũy từ BQ `DASTATUS6 (0x0076)`.
+- Chỉ cộng chênh lệch xả vào phần dư Q32; mỗi khi đủ dung lượng danh định thì tăng `completedCycleCount`, giữ phần dư cho chu kỳ kế tiếp.
+- Khi BQ reset bộ đếm hoặc dữ liệu nhảy bất thường, đặt lại mốc thay vì cộng giá trị sai. Xem `docs/bms_cycle_count.md` để biết giới hạn và cách lưu flash.
 
 ## 16. `static void BMS_UpdateBalancing(BMS_Tracking_t *tracking, uint32_t now)`
 - Mục đích: Tạo `balanceMask` và gửi xuống BQ để cân bằng cell.
@@ -227,27 +217,23 @@ Tài liệu này mô tả cách hoạt động của tất cả hàm trong file 
 - Ý nghĩa: Cân bằng có điều kiện, tránh ảnh hưởng khi pack đang xả hoặc có lỗi.
 
 ## 17. `static void BMS_LoadPersistedData(BMS_Tracking_t *tracking)`
-- Mục đích: Nạp dữ liệu throughput/cycle đã lưu từ flash.
+- Mục đích: Nạp số chu kỳ và phần dư đã lưu từ flash.
 - Cách làm:
 1. `storage_flash_load(&record)`.
 2. Nếu record invalid -> tạo mặc định (`storage_flash_make_default`).
-3. Nạp `chargeThroughput_mAh`, `dischargeThroughput_mAh`, `equivalentCycle_milliCycles`.
-4. Nội suy lại accumulator:
-- `chargeAccumulated_mAs = chargeThroughput_mAh * 3600`.
-- `dischargeAccumulated_mAs = dischargeThroughput_mAh * 3600`.
-5. Cập nhật mốc so sánh save (`g_last_saved_charge_mAh`, `g_last_saved_discharge_mAh`).
+3. Đọc bản ghi V3 (`completedCycleCount` và phần dư Q32); bản ghi V2 được chuyển từ tổng xả mAh cũ.
+4. Cập nhật mốc so sánh save (`g_last_saved_cycle_count`, `g_last_saved_remainder_q32`).
 - Ý nghĩa: Duy trì thống kê vòng đời qua mỗi lần reset nguồn.
 
 ## 18. `static void BMS_SavePersistedDataIfNeeded(const BMS_Tracking_t *tracking, uint32_t now)`
-- Mục đích: Lưu dữ liệu throughput/cycle ra flash theo chu kỳ và theo ngưỡng thay đổi.
+- Mục đích: Lưu số chu kỳ và phần dư ra flash theo ngưỡng thay đổi.
 - Điều kiện chạy:
-1. Chỉ xét khi đã qua `BMS_FLASH_SAVE_INTERVAL_MS` (10 phút).
-2. Tính delta charge/discharge so với lần lưu gần nhất.
-3. Nếu cả 2 delta < `BMS_FLASH_SAVE_DELTA_MAH` (100mAh), không ghi flash, chỉ cập nhật tick.
+1. Khi có chu kỳ mới, thử lưu sớm (giới hạn thử lại 1 giây).
+2. Nếu chưa có chu kỳ mới, sau `BMS_FLASH_SAVE_INTERVAL_MS` (1 phút) kiểm tra phần dư tăng ít nhất `BMS_FLASH_SAVE_DELTA_MAH` (50 mAh).
 - Khi cần ghi:
 1. Tạo record mặc định.
 2. Nạp record cũ để tăng `writeCounter`.
-3. Ghi throughput/cycle hiện tại + nominal capacity.
+3. Ghi `completedCycleCount`, phần dư Q32 và nominal capacity.
 4. `storage_flash_save(&record)`.
 5. Nếu thành công: cập nhật tick + mốc saved.
 6. Nếu thất bại: log lỗi, giữ mốc cũ.
@@ -292,7 +278,7 @@ Tài liệu này mô tả cách hoạt động của tất cả hàm trong file 
 - `BMS_UpdateCurrentDirection`
 - `BMS_UpdateFaultFlags`
 - `BMS_MergeBQFaultFlags`
-- `BMS_UpdateCoulombCounter`
+- `BMS_UpdateUsageCounter`
 - `BMS_UpdateState`
 - `BMS_ApplyFetPolicy`
 - `BMS_UpdateBalancing`

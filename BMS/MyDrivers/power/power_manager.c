@@ -7,7 +7,6 @@
 #include "watchdog.h"
 
 extern ADC_HandleTypeDef hadc;
-extern LPTIM_HandleTypeDef hlptim1;
 extern RTC_HandleTypeDef hrtc;
 extern UART_HandleTypeDef huart2;
 
@@ -227,26 +226,19 @@ static HAL_StatusTypeDef power_manager_suspend_run_peripherals(void)
         status = HAL_ERROR;
     }
 
-    if (HAL_LPTIM_DeInit(&hlptim1) != HAL_OK) {
-        status = HAL_ERROR;
-    }
-
     (void)HAL_UART_Abort(&huart2);
     if (HAL_UART_DeInit(&huart2) != HAL_OK) {
         status = HAL_ERROR;
     }
 
     HAL_NVIC_DisableIRQ(USART2_IRQn);
-    HAL_NVIC_DisableIRQ(LPTIM1_IRQn);
     HAL_NVIC_ClearPendingIRQ(USART2_IRQn);
-    HAL_NVIC_ClearPendingIRQ(LPTIM1_IRQn);
     return status;
 }
 
 static HAL_StatusTypeDef power_manager_resume_run_peripherals(void)
 {
     MX_ADC_Init();
-    MX_LPTIM1_Init();
     MX_USART2_UART_Init();
 
 #if BMS_UART_PROTOCOL_ENABLE

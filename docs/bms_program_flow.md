@@ -75,18 +75,17 @@ Moi lan `BMS_Update()` chay theo thu tu co dinh:
 5. Xac dinh chieu dong bang `BMS_UpdateCurrentDirection()`.
 6. Cap nhat fault firmware co hysteresis bang `BMS_UpdateFaultFlags()`.
 7. Hop nhat fault do BQ bao bang `BMS_MergeBQFaultFlags()`.
-8. Tich luy dong sac/xa bang `BMS_UpdateCoulombCounter()`.
+8. Tich luy luong dien sac/xa bang `BMS_UpdateUsageCounter()`.
 9. Cap nhat state pack bang `BMS_UpdateState()`.
 10. Ap dung FET policy bang `BMS_ApplyFetPolicy()`.
 11. Cap nhat cell balancing bang `BMS_UpdateBalancing()`.
-12. Tang `circle_counter`.
+12. Đánh dấu tracking đã khởi tạo.
 
 ## 5. Measurement Model
 
 `BMS_ReadMeasurements()` doc cac du lieu:
 
 - `cellVoltages[10]`: dien ap tung cell theo mapping 10S cua pack.
-- `stackVoltage`: tam thoi khong xu ly trong tracking runtime.
 - `packVoltage`: tong dien ap 10 cell, tinh bang tong `cellVoltages[]`.
 - `current_mA`: dong hien tai tu BQ.
 - `temperature[0]`: TS1.
@@ -233,23 +232,19 @@ Cach nay cho phep:
 
 ## 11. Coulomb Counter And Cycle Count
 
-`BMS_UpdateCoulombCounter()` dung `dt_ms` va `abs(current_mA)` de tich luy:
+`BMS_UpdateUsageCounter()` lay chenhlech dien luong tich luy `DASTATUS6` cua BQ76952. Chi luong xa duoc cong vao phan du Q32; khi du mot dung luong danh dinh thi tang so chu ky:
 
-- `chargeAccumulated_mAs`
-- `dischargeAccumulated_mAs`
-- `chargeThroughput_mAh`
-- `dischargeThroughput_mAh`
-- `equivalentCycle_milliCycles`
+- `completedCycleCount` (u32, so chu ky nguyen)
+- `g_cycle_remainder_q32` (u64 noi bo, phan du cua chu ky hien tai)
 
-Cong thuc:
+Cong thuc tuong duong:
 
 ```c
-sample_mAs = abs(current_mA) * dt_ms / 1000;
-mAh = accumulated_mAs / 3600;
-equivalentCycle_milliCycles = chargeThroughput_mAh * 1000 / BMS_NOMINAL_CAPACITY_MAH;
+completedCycleCount += totalDischargeQ32 / nominalCapacityQ32;
+cycleRemainderQ32 = totalDischargeQ32 % nominalCapacityQ32;
 ```
 
-Hien tai gia tri nay nam trong RAM. Neu can giu sau khi mat nguon, can them co che ghi Flash/EEPROM co gioi han tan suat ghi.
+So chu ky va phan du duoc luu trong flash theo nguong thay doi, ngay sau khi dat chu ky moi va truoc SHUTDOWN. Chi tiet va gioi han: `docs/bms_cycle_count.md`.
 
 ## 12. Cell Balancing
 
@@ -316,9 +311,8 @@ Log khong ghi moi 100 ms de tranh spam UART va lam cham control loop.
 
 `storage_flash` chua 1 record nho de luu cac thong so can giu sau mat nguon:
 
-- `chargeThroughput_mAh`
-- `dischargeThroughput_mAh`
-- `equivalentCycle_milliCycles`
+- `completedCycleCount`
+- `cycleRemainderQ32Lo/Hi`
 - `nominalCapacity_mAh`
 - `writeCounter`
 
@@ -329,12 +323,12 @@ Vung Flash dung de luu:
 - Page size STM32L0: `128 bytes`.
 - Linker script da giam `FLASH` xuong `31K`, de lai 1 KB cuoi Flash cho storage.
 
-`BMS_LoadPersistedData()` doc record khi khoi dong. Neu record sai magic/version/checksum thi dung default.
+`BMS_LoadPersistedData()` doc record khi khoi dong. Record V2 duoc chuyen sang so chu ky + phan du; neu sai magic/version/checksum thi dung default.
 
 `BMS_SavePersistedDataIfNeeded()` chi ghi lai khi:
 
-- Da qua `BMS_FLASH_SAVE_INTERVAL_MS`, va
-- `chargeThroughput_mAh` hoac `dischargeThroughput_mAh` tang it nhat `BMS_FLASH_SAVE_DELTA_MAH`.
+- Khi so chu ky tang: uu tien ghi som (gioi han thu lai 1 giay), hoac
+- Da qua `BMS_FLASH_SAVE_INTERVAL_MS` va phan du tang it nhat `BMS_FLASH_SAVE_DELTA_MAH`.
 
 Muc dich la giam so lan erase/write Flash.
 
@@ -362,7 +356,6 @@ Cac truong nen quan sat khi debug:
 - `state`
 - `currentDirection`
 - `cellVoltages[]`
-- `stackVoltage` (reserved/runtime unused)
 - `packVoltage` (sum of cell voltages)
 - `current_mA`
 - `temperature[]`
@@ -371,6 +364,4 @@ Cac truong nen quan sat khi debug:
 - `dischargeDisabled`
 - `balanceRequired`
 - `balanceMask`
-- `chargeThroughput_mAh`
-- `dischargeThroughput_mAh`
-- `equivalentCycle_milliCycles`
+- `completedCycleCount`

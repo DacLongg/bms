@@ -5,6 +5,51 @@
 
 static uint32_t storage_flash_checksum(const storage_flash_record_t *record);
 static bool storage_flash_is_valid_address_range(void);
+#define STORAGE_FLASH_BANK_BYTES (STORAGE_FLASH_SIZE_BYTES / 2UL)
+#define STORAGE_FLASH_SLOTS_PER_BANK (STORAGE_FLASH_BANK_BYTES / sizeof(storage_flash_record_t))
+
+_Static_assert(sizeof(storage_flash_record_t) == 36U,
+               "V3 record must match V2 flash slot size for migration");
+
+static bool storage_flash_find_latest(storage_flash_record_t *record,
+                                      uint32_t *bank, uint32_t *slot)
+{
+    bool found = false;
+
+    for (uint32_t b = 0U; b < 2U; ++b) {
+        for (uint32_t s = 0U; s < STORAGE_FLASH_SLOTS_PER_BANK; ++s) {
+            const storage_flash_record_t *candidate =
+                (const storage_flash_record_t *)(STORAGE_FLASH_BASE_ADDRESS +
+                    b * STORAGE_FLASH_BANK_BYTES + s * sizeof(storage_flash_record_t));
+            if ((candidate->magic != STORAGE_FLASH_MAGIC) ||
+                ((candidate->version != STORAGE_FLASH_VERSION) &&
+                 (candidate->version != STORAGE_FLASH_LEGACY_VERSION)) ||
+                (candidate->checksum != storage_flash_checksum(candidate))) {
+                continue;
+            }
+            if (!found || ((int32_t)(candidate->writeCounter - record->writeCounter) > 0)) {
+                *record = *candidate;
+                *bank = b;
+                *slot = s;
+                found = true;
+            }
+        }
+    }
+    return found;
+}
+
+static bool storage_flash_slot_empty(uint32_t bank, uint32_t slot)
+{
+    const uint32_t *words = (const uint32_t *)(STORAGE_FLASH_BASE_ADDRESS +
+        bank * STORAGE_FLASH_BANK_BYTES + slot * sizeof(storage_flash_record_t));
+
+    for (uint32_t i = 0U; i < sizeof(storage_flash_record_t) / sizeof(uint32_t); ++i) {
+        if (words[i] != 0xFFFFFFFFUL) {
+            return false;
+        }
+    }
+    return true;
+}
 
 void storage_flash_make_default(storage_flash_record_t *record)
 {
@@ -21,20 +66,11 @@ void storage_flash_make_default(storage_flash_record_t *record)
 
 bool storage_flash_load(storage_flash_record_t *record)
 {
-    const storage_flash_record_t *stored = (const storage_flash_record_t *)STORAGE_FLASH_BASE_ADDRESS;
+    uint32_t bank;
+    uint32_t slot;
 
-    if (record == NULL) {
-        return false;
-    }
-
-    memcpy(record, stored, sizeof(*record));
-    if (record->magic != STORAGE_FLASH_MAGIC) {
-        return false;
-    }
-    if (record->version != STORAGE_FLASH_VERSION) {
-        return false;
-    }
-    if (record->checksum != storage_flash_checksum(record)) {
+    if ((record == NULL) || !storage_flash_is_valid_address_range() ||
+        !storage_flash_find_latest(record, &bank, &slot)) {
         return false;
     }
     if (record->currentCalibrationGainPpm == 0UL) {
@@ -48,9 +84,14 @@ bool storage_flash_save(const storage_flash_record_t *record)
 {
     FLASH_EraseInitTypeDef erase = {0};
     storage_flash_record_t write_record;
+    storage_flash_record_t latest_record;
     uint32_t page_error = 0U;
     const uint32_t *words;
-    uint32_t address = STORAGE_FLASH_BASE_ADDRESS;
+    uint32_t bank = 0U;
+    uint32_t slot = 0U;
+    uint32_t address;
+    bool erase_bank = false;
+    bool has_latest;
     HAL_StatusTypeDef status;
 
     if ((record == NULL) || !storage_flash_is_valid_address_range()) {
@@ -62,16 +103,33 @@ bool storage_flash_save(const storage_flash_record_t *record)
     write_record.version = STORAGE_FLASH_VERSION;
     write_record.checksum = storage_flash_checksum(&write_record);
 
+    has_latest = storage_flash_find_latest(&latest_record, &bank, &slot);
+    if (has_latest) {
+        ++slot;
+    }
+    while ((slot < STORAGE_FLASH_SLOTS_PER_BANK) &&
+           !storage_flash_slot_empty(bank, slot)) {
+        ++slot;
+    }
+    if (slot >= STORAGE_FLASH_SLOTS_PER_BANK) {
+        bank = has_latest ? (bank ^ 1U) : 0U;
+        slot = 0U;
+        erase_bank = true;
+    }
+    address = STORAGE_FLASH_BASE_ADDRESS + bank * STORAGE_FLASH_BANK_BYTES +
+              slot * sizeof(storage_flash_record_t);
+
     status = HAL_FLASH_Unlock();
     if (status != HAL_OK) {
         return false;
     }
 
-    erase.TypeErase = FLASH_TYPEERASE_PAGES;
-    erase.PageAddress = STORAGE_FLASH_BASE_ADDRESS;
-    erase.NbPages = STORAGE_FLASH_SIZE_BYTES / FLASH_PAGE_SIZE;
-
-    status = HAL_FLASHEx_Erase(&erase, &page_error);
+    if (erase_bank) {
+        erase.TypeErase = FLASH_TYPEERASE_PAGES;
+        erase.PageAddress = STORAGE_FLASH_BASE_ADDRESS + bank * STORAGE_FLASH_BANK_BYTES;
+        erase.NbPages = STORAGE_FLASH_BANK_BYTES / FLASH_PAGE_SIZE;
+        status = HAL_FLASHEx_Erase(&erase, &page_error);
+    }
     if (status == HAL_OK) {
         words = (const uint32_t *)&write_record;
         for (uint32_t i = 0U; i < (sizeof(write_record) / sizeof(uint32_t)); ++i) {
@@ -84,7 +142,10 @@ bool storage_flash_save(const storage_flash_record_t *record)
     }
 
     (void)HAL_FLASH_Lock();
-    return status == HAL_OK;
+    return (status == HAL_OK) &&
+           (memcmp((const void *)(STORAGE_FLASH_BASE_ADDRESS +
+              bank * STORAGE_FLASH_BANK_BYTES + slot * sizeof(storage_flash_record_t)),
+                   &write_record, sizeof(write_record)) == 0);
 }
 
 static uint32_t storage_flash_checksum(const storage_flash_record_t *record)
@@ -112,5 +173,7 @@ static bool storage_flash_is_valid_address_range(void)
     return (STORAGE_FLASH_BASE_ADDRESS >= FLASH_BASE) &&
            ((STORAGE_FLASH_BASE_ADDRESS + STORAGE_FLASH_SIZE_BYTES) <= flash_end) &&
            ((STORAGE_FLASH_BASE_ADDRESS % FLASH_PAGE_SIZE) == 0U) &&
-           ((STORAGE_FLASH_SIZE_BYTES % FLASH_PAGE_SIZE) == 0U);
+           ((STORAGE_FLASH_SIZE_BYTES % FLASH_PAGE_SIZE) == 0U) &&
+           ((STORAGE_FLASH_BANK_BYTES % FLASH_PAGE_SIZE) == 0U) &&
+           ((sizeof(storage_flash_record_t) % sizeof(uint32_t)) == 0U);
 }
