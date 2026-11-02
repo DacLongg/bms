@@ -15,6 +15,7 @@
 #define BMS_BAT_ADC_SAMPLE_MS                   1000U
 #define BMS_BAT_ADC_SETTLE_MS                   5U
 #define BMS_FET_STATUS_SETTLE_MS                2U
+#define BMS_FET_DIAGNOSTIC_INTERVAL_MS          5000U
 #define BMS_BQ_FET_STAT_CHG_FET                 0x01U
 #define BMS_BQ_FET_STAT_DSG_FET                 0x04U
 #define BMS_BQ_ALARM_RAW_XCHG                   0x0040U
@@ -31,6 +32,10 @@
  */
 #define BMS_BAT_ADC_CAL_NUM                     955UL
 #define BMS_BAT_ADC_CAL_DEN                     1000UL
+/* Temporary LD gain trial: 38.39 V reported by BQ, 40.50 V measured at LD. */
+#define BMS_LD_CAL_TEST_ENABLE                  1U
+#define BMS_LD_CAL_REPORTED_MV                   38390U
+#define BMS_LD_CAL_ACTUAL_MV                     40500U
 #define BMS_PASSQ_Q32_SCALE                     4294967296ULL
 #define BMS_FLASH_CYCLE_SAVE_RETRY_MS            1000UL
 
@@ -88,6 +93,9 @@ static void BMS_MergeBQFaultFlags(BMS_Tracking_t *tracking);
 static void BMS_UpdateState(BMS_Tracking_t *tracking);
 static void BMS_ApplyFetPolicy(BMS_Tracking_t *tracking);
 static void BMS_SyncStateWithFetAvailability(BMS_Tracking_t *tracking);
+#if BMS_DEBUG_LOG_ENABLE
+static void BMS_LogDsgFetDiagnostic(uint8_t command_status);
+#endif
 static uint64_t BMS_PassqFromMilliampHours(uint32_t mAh);
 static void BMS_UpdateBalancing(BMS_Tracking_t *tracking, uint32_t now);
 static void BMS_LoadPersistedData(BMS_Tracking_t *tracking);
@@ -387,6 +395,9 @@ static void BMS_ConfigureMonitor(void)
     uint32_t over_current_chargr_mV;
     int16_t discharge_ocd3_threshold_code;
     int32_t discharge_ocd3_abs_code;
+    uint16_t ld_factory_gain = 0U;
+    uint16_t ld_applied_gain = 0U;
+    bool ld_cal_ok;
     uint8_t config_ok = 1U;
 
     BMS_LOG_INFO("configure bq76952");
@@ -395,6 +406,18 @@ static void BMS_ConfigureMonitor(void)
     bq76952_setShutdownStackVoltage(0);
     BMS_BQ_CONFIG_STEP(config_ok, bq76952_setVcellMode(bq76952_getConnectedCellMask()));
     BMS_BQ_CONFIG_STEP(config_ok, bq76952_setDA_Config());
+#if BMS_LD_CAL_TEST_ENABLE
+    ld_cal_ok = bq76952_setLdGainCorrection(BMS_LD_CAL_ACTUAL_MV,
+                                             BMS_LD_CAL_REPORTED_MV,
+                                             &ld_factory_gain, &ld_applied_gain);
+#else
+    ld_cal_ok = bq76952_setLdGainCorrection(1U, 1U,
+                                             &ld_factory_gain, &ld_applied_gain);
+#endif
+    BMS_BQ_CONFIG_STEP(config_ok, ld_cal_ok);
+    BMS_LOG_WARN("ldcal trial=%u ok=%u base=%u applied=%u",
+                 (unsigned int)BMS_LD_CAL_TEST_ENABLE, (unsigned int)ld_cal_ok,
+                 (unsigned int)ld_factory_gain, (unsigned int)ld_applied_gain);
     BMS_BQ_CONFIG_STEP(config_ok, bq76952_setCurrentSenseCalibration(
                                   g_bms_tracking.currentCalibrationGainPpm));
     BMS_BQ_CONFIG_STEP(config_ok, bq76952_setEnableProtectionsA());
@@ -481,6 +504,9 @@ static void BMS_ConfigureMonitor(void)
                  (unsigned long)over_current_sense_mV,
                  (long)discharge_ocd3_threshold_code,
                  (unsigned int)config_ok);
+    BMS_LOG_WARN("ldcal result ld=%u stack=%u gain=%u",
+                 bq76952_getLdVoltage(), bq76952_getStackVoltage(),
+                 (unsigned int)ld_applied_gain);
 }
 
 static void BMS_ConfigureHardwarePins(void)
@@ -1020,6 +1046,11 @@ static void BMS_UpdateState(BMS_Tracking_t *tracking)
 
 static void BMS_ApplyFetPolicy(BMS_Tracking_t *tracking)
 {
+#if BMS_DEBUG_LOG_ENABLE
+    bool fet_on_cmd_sent = false;
+    bool fet_on_cmd_ok = true;
+#endif
+
     if (tracking == NULL) {
         return;
     }
@@ -1038,14 +1069,31 @@ static void BMS_ApplyFetPolicy(BMS_Tracking_t *tracking)
                !tracking->bqAlarmRawStatus.bit.SSA &&
                !tracking->bqAlarmRawStatus.bit.SSBC) {
         BMS_SetFetoff(false);
-        bq76952_setFET(ALL, ON);
+#if BMS_DEBUG_LOG_ENABLE
+        fet_on_cmd_sent = true;
+        fet_on_cmd_ok = bq76952_setFET(ALL, ON);
+#else
+        (void)bq76952_setFET(ALL, ON);
+#endif
     } else {
+#if BMS_DEBUG_LOG_ENABLE
+        if ((tracking->state == BMS_STATE_NORMAL) &&
+            (tracking->bqDischargeFetBlocked || !tracking->dischargeFetEnabled)) {
+            BMS_LogDsgFetDiagnostic(0U);
+        }
+#endif
         return;
     }
 
     HAL_Delay(BMS_FET_STATUS_SETTLE_MS);
     BMS_UpdateFetStatus(tracking);
     BMS_SyncStateWithFetAvailability(tracking);
+#if BMS_DEBUG_LOG_ENABLE
+    if (fet_on_cmd_sent &&
+        (!fet_on_cmd_ok || tracking->bqDischargeFetBlocked || !tracking->dischargeFetEnabled)) {
+        BMS_LogDsgFetDiagnostic(fet_on_cmd_ok ? 2U : 1U);
+    }
+#endif
 }
 
 static void BMS_SyncStateWithFetAvailability(BMS_Tracking_t *tracking)
@@ -1085,6 +1133,61 @@ static void BMS_SyncStateWithFetAvailability(BMS_Tracking_t *tracking)
         tracking->state = BMS_STATE_DISCHARGE_PROTECT;
     }
 }
+
+#if BMS_DEBUG_LOG_ENABLE
+static void BMS_LogDsgFetDiagnostic(uint8_t command_status)
+{
+    static uint32_t last_log_tick;
+    static bool has_logged;
+    uint32_t now = HAL_GetTick();
+    byte fet_status;
+    byte safety_a;
+    byte safety_b;
+    byte safety_c;
+    uint16_t alarm_raw_status;
+    uint16_t battery_status;
+    unsigned int stack_mv;
+    unsigned int ld_mv;
+    unsigned int fet_options;
+    unsigned int pdsg_timeout;
+    unsigned int pdsg_stop_delta;
+
+    if (has_logged && ((now - last_log_tick) < BMS_FET_DIAGNOSTIC_INTERVAL_MS)) {
+        return;
+    }
+    last_log_tick = now;
+    has_logged = true;
+
+    fet_status = bq76952_getFetStatusRaw();
+    alarm_raw_status = (uint16_t)bq76952_getAlertRawStatusRegister();
+    safety_a = bq76952_getSafetyStatusRawA();
+    safety_b = bq76952_getSafetyStatusRawB();
+    safety_c = bq76952_getSafetyStatus_C().all;
+    battery_status = (uint16_t)bq76952_getBatteryStatusRaw();
+    stack_mv = bq76952_getStackVoltage();
+    ld_mv = bq76952_getLdVoltage();
+    fet_options = bq76952_readDataMemory(FET_OPTIONS, 1);
+    pdsg_timeout = bq76952_readDataMemory(FET_PREDISCHARGE_TIMEOUT, 1);
+    pdsg_stop_delta = bq76952_readDataMemory(FET_PREDISCHARGE_STOP_DELTA, 1);
+
+    BMS_LOG_WARN("dsgdiag cmd=%u alarm=%04x fet=%02x pdsg=%u sa=%02x sb=%02x sc=%02x bat=%04x",
+                 (unsigned int)command_status,
+                 (unsigned int)alarm_raw_status,
+                 (unsigned int)fet_status,
+                 (unsigned int)((fet_status >> 3U) & 1U),
+                 (unsigned int)safety_a,
+                 (unsigned int)safety_b,
+                 (unsigned int)safety_c,
+                 (unsigned int)battery_status);
+    BMS_LOG_WARN("dsgdiag stack=%u ld=%u opts=%02x pdT=%u pdD=%u pa1=%u",
+                 stack_mv,
+                 ld_mv,
+                 fet_options,
+                 pdsg_timeout,
+                 pdsg_stop_delta,
+                 HAL_GPIO_ReadPin(FETOFF_GPIO_Port, FETOFF_Pin) == GPIO_PIN_SET ? 1U : 0U);
+}
+#endif
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {

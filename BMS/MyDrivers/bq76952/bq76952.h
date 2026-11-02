@@ -95,6 +95,7 @@ typedef enum {
 #define REG0_CONFIG 0x9237U
 #define POWER_CONFIG 0x9234U
 #define REG12_CONTROL 0x9236U
+#define LD_GAIN 0x91A4U
 #define CC_GAIN 0x91A8U
 #define CAPACITY_GAIN 0x91ACU
 #define CFETOFF_PIN_CONFIG 0x92FBU
@@ -508,12 +509,15 @@ byte bq76952_getFetStatusRaw(void);
 unsigned int bq76952_getStackVoltage(void);
 /* Đọc điện áp tại chân PACK của BQ76952, đơn vị mV. */
 unsigned int bq76952_getPackVoltage(void);
+unsigned int bq76952_getLdVoltage(void);
 /* Đọc nhiệt độ die nội bộ của IC, trả về độ C. */
 int16_t bq76952_getInternalTemp(void);
 /* Đọc nhiệt độ từ kênh thermistor/chân cảm biến được chọn, trả về độ C. */
 int16_t bq76952_getThermistorTemp(bq76952_thermistor_t thermistor);
 /* Đọc các cờ bảo vệ đang kích hoạt. */
 bq76952_protection_t bq76952_getProtectionStatus(void);
+byte bq76952_getSafetyStatusRawA(void);
+byte bq76952_getSafetyStatusRawB(void);
 /* Đọc các cờ alert latched nhóm C. */
 bq76952_safety_alert_c_t bq76952_getSafetyAlert_C(void);
 /* Đọc các cờ bảo vệ đang active trong Safety Status C. */
@@ -521,7 +525,7 @@ BQ76952_SafetyStatusC_t bq76952_getSafetyStatus_C(void);
 /* Đọc trạng thái bảo vệ nhiệt độ. */
 bq76952_temp_t bq76952_getTemperatureStatus(void);
 /* Điều khiển FET sạc/xả bằng subcommand của BQ76952. */
-void bq76952_setFET(bq76952_fet_t fet, bq76952_fet_state_t state);
+bool bq76952_setFET(bq76952_fet_t fet, bq76952_fet_state_t state);
 /* Bật quyền cho khối FET hoạt động sau khi khởi tạo. */
 void bq76952_setFET_ENABLE(void);
 /* Return true if BQ reports the discharge FET output is on. */
@@ -620,6 +624,8 @@ bool bq76952_isDeepSleep(void);
 bool bq76952_requestShutdown(void);
 /* Cấu hình gain đo dòng cho shunt 0.5 mOhm trên board, scale theo ppm. */
 bool bq76952_setCurrentSenseCalibration(uint32_t gain_ppm);
+bool bq76952_setLdGainCorrection(uint32_t actual_mv, uint32_t reported_mv,
+                                 uint16_t *factory_gain, uint16_t *applied_gain);
 /* Cấu hình DA (digital/analog) block theo preset của thư viện. */
 bool bq76952_setDA_Config(void);
 /* Bỏ mask alert nhóm A để lỗi tương ứng có thể kéo chân ALERT. */

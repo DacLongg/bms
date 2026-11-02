@@ -14,6 +14,7 @@
 /* Direct commands đọc dữ liệu tức thời. */
 #define CMD_READ_VOLTAGE_STACK      0x34U
 #define CMD_READ_VOLTAGE_PACK       0x36U
+#define CMD_READ_VOLTAGE_LD         0x38U
 
 #define CMD_DIR_SAFETY_STATUS_A     0x03U
 #define CMD_DIR_SAFETY_STATUS_B     0x05U
@@ -756,6 +757,11 @@ unsigned int bq76952_getPackVoltage(void)
     return bq76952_userVoltageCommandToMv(CMD_READ_VOLTAGE_PACK);
 }
 
+unsigned int bq76952_getLdVoltage(void)
+{
+    return bq76952_userVoltageCommandToMv(CMD_READ_VOLTAGE_LD);
+}
+
 
 unsigned int bq76952_getCOVSnapshot(byte cell)
 {
@@ -1078,6 +1084,16 @@ bq76952_protection_t bq76952_getProtectionStatus(void)
     return g_protection_status;
 }
 
+byte bq76952_getSafetyStatusRawA(void)
+{
+    return (byte)bq76952_directCommand(CMD_DIR_SAFETY_STATUS_A);
+}
+
+byte bq76952_getSafetyStatusRawB(void)
+{
+    return (byte)bq76952_directCommand(CMD_DIR_SAFETY_STATUS_B);
+}
+
 bq76952_safety_alert_c_t bq76952_getSafetyAlert_C(void)
 {
     byte regData = (byte)bq76952_directCommand(CMD_DIR_SAFETY_ALERT_C);
@@ -1114,7 +1130,7 @@ bq76952_temp_t bq76952_getTemperatureStatus(void)
     return status;
 }
 
-void bq76952_setFET(bq76952_fet_t fet, bq76952_fet_state_t state)
+bool bq76952_setFET(bq76952_fet_t fet, bq76952_fet_state_t state)
 {
     /* Mặc định 0x0096 là ALL_FETS_ON; các nhánh OFF dùng subcommand riêng cho CHG/DSG/ALL. */
     unsigned int subcmd = 0x0096U;
@@ -1134,7 +1150,8 @@ void bq76952_setFET(bq76952_fet_t fet, bq76952_fet_state_t state)
         }
     }
 
-    bq76952_subCommand(subcmd);
+    byte payload[2] = {LOW_BYTE(subcmd), HIGH_BYTE(subcmd)};
+    return bq76952_write_register(CMD_DIR_SUBCMD_LOW, payload, 2U);
 }
 
 void bq76952_setFET_ENABLE(void)
@@ -1580,6 +1597,58 @@ bool bq76952_setCurrentSenseCalibration(uint32_t gain_ppm)
     status &= (uint8_t)bq76952_writeU32DataMemory(CC_GAIN, cc_gain_raw);
     status &= (uint8_t)bq76952_writeU32DataMemory(CAPACITY_GAIN, capacity_gain_raw);
     return status != 0U;
+}
+
+bool bq76952_setLdGainCorrection(uint32_t actual_mv, uint32_t reported_mv,
+                                 uint16_t *factory_gain, uint16_t *applied_gain)
+{
+    byte data[2];
+    uint16_t base_gain;
+    uint16_t target_gain;
+    uint32_t scaled_gain;
+
+    if ((actual_mv == 0U) || (reported_mv == 0U) ||
+        (actual_mv > UINT16_MAX) || (reported_mv > UINT16_MAX)) {
+        return false;
+    }
+
+    /* 0 restores the factory gain. Read it outside CONFIG_UPDATE so repeated
+     * MCU resets cannot multiply an already corrected LD gain again. */
+    if (!bq76952_writeDataMemory(LD_GAIN, 0, 2U) ||
+        !bq76952_waitConfigUpdateMode(false, BQ_CONFIG_UPDATE_TIMEOUT_MS) ||
+        !bq76952_readDataMemoryBytes(LD_GAIN, data, 2U)) {
+        return false;
+    }
+    base_gain = (uint16_t)(((uint16_t)data[1] << 8) | data[0]);
+    if (base_gain == 0U) {
+        return false;
+    }
+
+    scaled_gain = ((uint32_t)base_gain * actual_mv + reported_mv / 2U) / reported_mv;
+    if ((scaled_gain == 0U) || (scaled_gain > UINT16_MAX)) {
+        return false;
+    }
+    target_gain = (uint16_t)scaled_gain;
+    if (target_gain != base_gain) {
+        if (!bq76952_writeDataMemory(LD_GAIN, (int16_t)target_gain, 2U)) {
+            (void)bq76952_writeDataMemory(LD_GAIN, 0, 2U);
+            return false;
+        }
+    }
+
+    if (!bq76952_waitConfigUpdateMode(false, BQ_CONFIG_UPDATE_TIMEOUT_MS) ||
+        !bq76952_readDataMemoryBytes(LD_GAIN, data, 2U) ||
+        ((uint16_t)(((uint16_t)data[1] << 8) | data[0]) != target_gain)) {
+        (void)bq76952_writeDataMemory(LD_GAIN, 0, 2U);
+        return false;
+    }
+    if (factory_gain != NULL) {
+        *factory_gain = base_gain;
+    }
+    if (applied_gain != NULL) {
+        *applied_gain = target_gain;
+    }
+    return true;
 }
 
 bool bq76952_setSF_AlertMask_A(void)

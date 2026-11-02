@@ -8,10 +8,13 @@ extern RTC_HandleTypeDef hrtc;
 extern UART_HandleTypeDef huart2;
 
 #define MAINAPP_BMS_UPDATE_MS 100U
+/* Test timing: idle 1 min -> SLEEP; 3 min in SLEEP -> DEEPSLEEP.
+ * Keep the wake intervals separate to exercise both low-power phases. */
 #define MAINAPP_IDLE_BEFORE_SLEEP_MINUTES 1U
-#define MAINAPP_SLEEP_WAKEUP_MINUTES 5U
-#define MAINAPP_DEEP_SLEEP_WAKEUP_DAYS 5U /* Change to 15U or 30U if required. */
-#define MAINAPP_DEEP_SLEEP_AFTER_DAYS 30U
+#define MAINAPP_SLEEP_WAKEUP_MINUTES 1U
+#define MAINAPP_DEEP_SLEEP_AFTER_MINUTES 3U
+#define MAINAPP_DEEP_SLEEP_WAKEUP_MINUTES 3U
+#define MAINAPP_DISABLE_BALANCING_FOR_SLEEP_TEST 1U /* Restore to 0 after the test. */
 #define MAINAPP_STOP_RTC_CHUNK_SECONDS (12UL * 60UL * 60UL)
 #define MAINAPP_ALERT_WAKE_CLEAR_TRIES 3U
 #define MAINAPP_ALERT_WAKE_SETTLE_MS 2U
@@ -19,15 +22,19 @@ extern UART_HandleTypeDef huart2;
 
 #define MAINAPP_IDLE_BEFORE_SLEEP_MS ((uint32_t)(MAINAPP_IDLE_BEFORE_SLEEP_MINUTES) * 60UL * 1000UL)
 #define MAINAPP_SLEEP_WAKEUP_SECONDS ((uint32_t)(MAINAPP_SLEEP_WAKEUP_MINUTES) * 60UL)
-#define MAINAPP_DEEP_SLEEP_WAKEUP_SECONDS ((uint32_t)(MAINAPP_DEEP_SLEEP_WAKEUP_DAYS) * 24UL * 60UL * 60UL)
-#define MAINAPP_DEEP_SLEEP_AFTER_SECONDS ((uint32_t)(MAINAPP_DEEP_SLEEP_AFTER_DAYS) * 24UL * 60UL * 60UL)
+#define MAINAPP_DEEP_SLEEP_WAKEUP_SECONDS ((uint32_t)(MAINAPP_DEEP_SLEEP_WAKEUP_MINUTES) * 60UL)
+#define MAINAPP_DEEP_SLEEP_AFTER_SECONDS ((uint32_t)(MAINAPP_DEEP_SLEEP_AFTER_MINUTES) * 60UL)
 
 #if (MAINAPP_SLEEP_WAKEUP_MINUTES == 0U) || (MAINAPP_SLEEP_WAKEUP_MINUTES > 1440U)
 #error "SLEEP wake interval must be between 1 and 1440 minutes"
 #endif
 
-#if (MAINAPP_DEEP_SLEEP_WAKEUP_DAYS == 0U) || (MAINAPP_DEEP_SLEEP_WAKEUP_DAYS > 30U)
-#error "DEEPSLEEP wake interval must be between 1 and 30 days"
+#if (MAINAPP_DEEP_SLEEP_WAKEUP_MINUTES == 0U) || (MAINAPP_DEEP_SLEEP_WAKEUP_MINUTES > 43200U)
+#error "DEEPSLEEP wake interval must be between 1 minute and 30 days"
+#endif
+
+#if (MAINAPP_DEEP_SLEEP_AFTER_MINUTES == 0U) || (MAINAPP_DEEP_SLEEP_AFTER_MINUTES > 43200U)
+#error "DEEPSLEEP entry threshold must be between 1 minute and 30 days"
 #endif
 
 #if BMS_DEBUG_LOG_ENABLE
@@ -221,14 +228,19 @@ void mainapp(void)
     if (!initialized) {
         Enable_Power_Battery();
         BMS_Init();
+#if MAINAPP_DISABLE_BALANCING_FOR_SLEEP_TEST
+        BMS_SetBalancingEnabled(false);
+        BMS_LOG_INFO("sleep test: cell balancing disabled");
+#endif
         now = HAL_GetTick();
         last_activity_tick = now;
         last_update_tick = now;
         initialized = true;
-        BMS_LOG_INFO("mainapp init idle=%lu min sleepWake=%lu min deepWake=%lu days",
+        BMS_LOG_INFO("mainapp init idle=%lu min sleepWake=%lu min deepAfter=%lu min deepWake=%lu min",
                      (unsigned long)MAINAPP_IDLE_BEFORE_SLEEP_MINUTES,
                      (unsigned long)MAINAPP_SLEEP_WAKEUP_MINUTES,
-                     (unsigned long)MAINAPP_DEEP_SLEEP_WAKEUP_DAYS);
+                     (unsigned long)MAINAPP_DEEP_SLEEP_AFTER_MINUTES,
+                     (unsigned long)MAINAPP_DEEP_SLEEP_WAKEUP_MINUTES);
         // BMS_Set_5V_Output(false);
     }
 
